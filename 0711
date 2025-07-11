@@ -1,0 +1,54 @@
+import com.github.javaparser.JavaParser;
+import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.ast.Modifier;
+import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.Parameter;
+import com.github.javaparser.ast.visitor.VoidVisitorAdapter;
+import com.github.javaparser.utils.SourceRoot;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.List;
+import java.util.stream.Collectors;
+
+public class FinalParamAdder {
+
+    public static void main(String[] args) throws IOException {
+        Path projectRoot = Paths.get("your/project/root/path"); // 修改为你的项目根路径
+        List<Path> specFiles = Files.walk(projectRoot)
+                .filter(p -> p.getFileName().toString().endsWith("Spec.java"))
+                .collect(Collectors.toList());
+
+        JavaParser parser = new JavaParser();
+
+        for (Path specFile : specFiles) {
+            System.out.println("Processing: " + specFile);
+
+            CompilationUnit cu = parser.parse(specFile).getResult().orElse(null);
+            if (cu == null) continue;
+
+            boolean[] changed = {false};
+
+            cu.findAll(MethodDeclaration.class).stream()
+                    .filter(m -> m.getNameAsString().equals("isSatisfiedBy"))
+                    .forEach(method -> {
+                        for (Parameter param : method.getParameters()) {
+                            if (!param.isFinal()) {
+                                param.setFinal(true);
+                                changed[0] = true;
+                            }
+                        }
+                    });
+
+            if (changed[0]) {
+                Files.write(specFile, cu.toString().getBytes());
+                System.out.println("✔ Updated: " + specFile);
+            } else {
+                System.out.println("✓ No change: " + specFile);
+            }
+        }
+    }
+}
