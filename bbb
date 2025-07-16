@@ -1,0 +1,24 @@
+メールテンプレートAggregate メールテンプレート = メールテンプレート管理取得usecase.取得(uc.事業者コード(), uc.メール種別());
+
+		List<メールテンプレート変数Vo> メールテンプレート変数list = メールテンプレート.メールテンプレート変数list();
+		Map<String, Object> メールテンプレート変数map = メールテンプレート変数list.stream()
+				.filter(Objects::nonNull)
+				.collect(Collectors.toMap(
+						vo -> vo.変数名().toString(),
+						vo -> vo.サンプル値().toString()));
+
+		メールテンプレート差込情報Vo 差込情報 = uc.差込情報();
+		Map<String, Object> 差込情報map = new HashMap<>();
+
+		if (差込情報 != null) {
+			Optional<メールテンプレート差込情報> mapOpt = 差込情報.getTemplate(uc.事業者コード, uc.メール種別);
+			if (mapOpt.isPresent()) {
+				メールテンプレート差込情報 差込情報Entity = Objects.requireNonNull(mapOpt.get());
+				差込情報map = 差込情報Entity.toMap();
+			}
+		}
+
+		boolean result = hasSameSizeAndKeys(差込情報map, メールテンプレート変数map);
+		if (!result) {
+			throw new IllegalStateException("メールテンプレート変数が一致しません。");
+		}
