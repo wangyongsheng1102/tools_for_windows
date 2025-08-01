@@ -1,0 +1,255 @@
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.*;
+
+@RestController
+@RequestMapping("/h2dump")
+public class H2DumpController {
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    // 1. 列出所有用户表（排除系统表）
+    @GetMapping("/tables")
+    public List<Map<String, Object>> listTables() {
+        String sql = """
+            SELECT TABLE_SCHEMA, TABLE_NAME
+            FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_TYPE='TABLE'
+              AND TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA', 'SYSTEM_LOBS')
+            ORDER BY TABLE_SCHEMA, TABLE_NAME
+            """;
+        return jdbcTemplate.queryForList(sql);
+    }
+
+    // 2. 某张表的列结构（包括类型/nullable/default）
+    @GetMapping("/table/{schema}/{table}/schema")
+    public List<Map<String, Object>> tableSchema(
+            @PathVariable String schema,
+            @PathVariable String table) {
+        String sql = """
+            SELECT COLUMN_NAME, TYPE_NAME, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLUMN_DEFAULT
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+            ORDER BY ORDINAL_POSITION
+            """;
+        return jdbcTemplate.queryForList(sql, schema.toUpperCase(), table.toUpperCase());
+    }
+
+    // 3. 主键信息
+    @GetMapping("/table/{schema}/{table}/primary-keys")
+    public List<Map<String, Object>> primaryKeys(
+            @PathVariable String schema,
+            @PathVariable String table) {
+        String sql = """
+            SELECT KC.COLUMN_NAME
+            FROM INFORMATION_SCHEMA.CONSTRAINTS C
+            JOIN INFORMATION_SCHEMA.CONSTRAINT_COLUMNS KC
+              ON C.CONSTRAINT_NAME = KC.CONSTRAINT_NAME
+             AND C.TABLE_SCHEMA = KC.TABLE_SCHEMA
+             AND C.TABLE_NAME = KC.TABLE_NAME
+            WHERE C.CONSTRAINT_TYPE='PRIMARY KEY'
+              AND C.TABLE_SCHEMA=?
+              AND C.TABLE_NAME=?
+            ORDER BY KC.ORDINAL_POSITION
+            """;
+        return jdbcTemplate.queryForList(sql, schema.toUpperCase(), table.toUpperCase());
+    }
+
+    // 4. 表数据（支持分页）
+    @GetMapping("/table/{schema}/{table}/data")
+    public Map<String, Object> tableData(
+            @PathVariable String schema,
+            @PathVariable String table,
+            @RequestParam(defaultValue = "0") int offset,
+            @RequestParam(defaultValue = "1000") int limit) {
+
+        String countSql = String.format("SELECT COUNT(*) FROM %s.%s", schema, table);
+        Integer total = jdbcTemplate.queryForObject(countSql, Integer.class);
+
+        String dataSql = String.format("SELECT * FROM %s.%s LIMIT %d OFFSET %d", schema, table, limit, offset);
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(dataSql);
+
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("total", total);
+        resp.put("offset", offset);
+        resp.put("limit", limit);
+        resp.put("rows", rows);
+        return resp;
+    }
+
+    // 5. 一次性获取某张表完整数据（分页封装）
+    @GetMapping("/table/{schema}/{table}/full")
+    public Map<String, Object> fullTable(@PathVariable String schema, @PathVariable String table) {
+        List<Map<String, Object>> all = new ArrayList<>();
+        int offset = 0;
+        int limit = 1000;
+        Integer total = null;
+        while (true) {
+            Map<String, Object> chunk = tableData(schema, table, offset, limit);
+            if (total == null) {
+                total = (Integer) chunk.get("total");
+            }
+            List<Map<String, Object>> rows = (List<Map<String, Object>>) chunk.get("rows");
+            all.addAll(rows);
+            offset += limit;
+            if (offset >= total) break;
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("total", total);
+        out.put("rows", all);
+        return out;
+    }
+}
+
+
+
+import requests
+import pandas as pd
+import os
+import json
+import argparse
+from pathlib import Path
+from datetime import datetime
+
+BASE = "http://localhost:8080/h2dump"  # 改成你的地址/端口
+
+def fetch_tables():
+    r = requests.get(f"{BASE}/tables")
+    r.raise_for_status()
+    return r.json()
+
+def fetch_schema(schema, table):
+    r = requests.get(f"{BASE}/table/{schema}/{table}/schema")
+    r.raise_for_status()
+    return r.json()
+
+def fetch_pks(schema, table):
+    r = requests.get(f"{BASE}/table/{schema}/{table}/primary-keys")
+    r.raise_for_status()
+    return [d["COLUMN_NAME"] for d in r.json()]
+
+def fetch_full_table(schema, table):
+    r = requests.get(f"{BASE}/table/{schema}/{table}/full")
+    r.raise_for_status()
+    return r.json()
+
+def dump_all(outdir):
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    meta = {"tables": []}
+
+    tables = fetch_tables()
+    for t in tables:
+        schema = t["TABLE_SCHEMA"]
+        table = t["TABLE_NAME"]
+        print(f"抓取 {schema}.{table} ...")
+        # schema + pk
+        schema_info = fetch_schema(schema, table)
+        pks = fetch_pks(schema, table)
+
+        # 保存结构/主键
+        with open(outdir / f"{schema}.{table}.schema.json", "w", encoding="utf-8") as f:
+            json.dump({"columns": schema_info, "primary_keys": pks}, f, ensure_ascii=False, indent=2)
+
+        # 表数据
+        table_data = fetch_full_table(schema, table)
+        rows = table_data["rows"]
+        df = pd.DataFrame(rows)
+        csv_path = outdir / f"{schema}.{table}.csv"
+        df.to_csv(csv_path, index=False)
+
+        meta["tables"].append({"schema": schema, "table": table, "rows": len(rows)})
+
+    # 写 meta
+    with open(outdir / "meta.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+
+    print(f"全部导出到 {outdir}")
+
+def diff_dirs(before_dir, after_dir, out_dir):
+    before_dir = Path(before_dir)
+    after_dir = Path(after_dir)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    tables = []
+    # 以 before 的 meta 为基准
+    with open(before_dir / "meta.json", encoding="utf-8") as f:
+        meta_before = json.load(f)
+    for info in meta_before["tables"]:
+        schema = info["schema"]
+        table = info["table"]
+        print(f"比较 {schema}.{table} ...")
+        before_csv = before_dir / f"{schema}.{table}.csv"
+        after_csv = after_dir / f"{schema}.{table}.csv"
+
+        if not before_csv.exists() or not after_csv.exists():
+            print(f"  警告：缺少 {schema}.{table} 的某一侧 CSV")
+            continue
+
+        df_before = pd.read_csv(before_csv)
+        df_after = pd.read_csv(after_csv)
+
+        # 主键用来对齐
+        with open(before_dir / f"{schema}.{table}.schema.json", encoding="utf-8") as f:
+            sch = json.load(f)
+        pks = sch["primary_keys"]
+        if not pks:
+            # 没主键就全量比差异（简单）
+            merged = df_before.merge(df_after, how="outer", indicator=True)
+            added = merged[merged["_merge"] == "right_only"].drop(columns=["_merge"])
+            removed = merged[merged["_merge"] == "left_only"].drop(columns=["_merge"])
+            changed = pd.DataFrame()  # 无法精确 diff
+        else:
+            # 以主键为索引对齐
+            df_b = df_before.set_index(pks).sort_index()
+            df_a = df_after.set_index(pks).sort_index()
+
+            added = df_a[~df_a.index.isin(df_b.index)].reset_index()
+            removed = df_b[~df_b.index.isin(df_a.index)].reset_index()
+
+            # 交集部分找出字段变动
+            common_idx = df_b.index.intersection(df_a.index)
+            before_common = df_b.loc[common_idx]
+            after_common = df_a.loc[common_idx]
+            diff_mask = (before_common != after_common) & ~(before_common.isna() & after_common.isna())
+            changed_rows = []
+            for idx in common_idx:
+                diffs = {}
+                for col in before_common.columns:
+                    val_b = before_common.loc[idx, col]
+                    val_a = after_common.loc[idx, col]
+                    if pd.isna(val_b) and pd.isna(val_a):
+                        continue
+                    if val_b != val_a:
+                        diffs[col] = {"before": val_b, "after": val_a}
+                if diffs:
+                    # 主键值回到列形式
+                    pk_vals = dict(zip(pks, idx if isinstance(idx, tuple) else (idx,)))
+                    changed_rows.append({"primary_key": pk_vals, "diffs": diffs})
+            changed = pd.DataFrame(changed_rows)
+
+        # 写差异报告
+        prefix = f"{schema}.{table}"
+        added.to_csv(out_dir / f"{prefix}.added.csv", index=False)
+        removed.to_csv(out_dir / f"{prefix}.removed.csv", index=False)
+        if not changed.empty:
+            changed.to_json(out_dir / f"{prefix}.changed.json", orient="records", indent=2)
+
+        tables.append({
+            "schema": schema,
+            "table": table,
+            "added": len(added),
+            "removed": len(removed),
+            "changed": len(changed_rows) if 'changed_rows' in locals() else 0
+        })
+
+    # 总结
+    with open(out_dir / "diff_summary.json", "w", encoding="utf-8") as f:
+        json.dump({"tables": tables}, f, ensure_ascii=False, indent=2)
+
+    print(f"差异写入 {out_dir}")
