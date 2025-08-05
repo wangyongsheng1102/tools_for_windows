@@ -1,0 +1,307 @@
+import sys
+import os
+import subprocess
+import time
+import webbrowser
+import signal
+import threading
+import yaml
+import logging
+from logging.handlers import RotatingFileHandler
+import socket
+
+# 第三方 tray lib
+import pystray
+from PIL import Image, ImageDraw
+
+# ---------- 辅助：资源路径兼容 frozen ----------
+def resource_path(rel):
+    if getattr(sys, "frozen", False):
+        base = sys._MEIPASS
+    else:
+        base = os.path.abspath(os.path.dirname(__file__))
+    return os.path.join(base, rel)
+
+# ---------- 读取配置 ----------
+def load_config():
+    cfg_path = resource_path("config.yaml")
+    if not os.path.exists(cfg_path):
+        raise FileNotFoundError(f"找不到配置文件 {cfg_path}")
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+    # 默认值填补
+    cfg.setdefault("port", 8501)
+    cfg.setdefault("title", "Streamlit 应用")
+    cfg.setdefault("auto_open_browser", True)
+    cfg.setdefault("log_file", "streamlit_manager.log")
+    cfg.setdefault("streamlit_log_file", "streamlit_app.log")
+    cfg.setdefault("streamlit_args", ["--server.headless=true", "--server.runOnSave=false"])
+    cfg.setdefault("healthcheck_timeout", 10)
+    return cfg
+
+# ---------- 日志初始化 ----------
+def setup_logging(log_file):
+    logger = logging.getLogger("launcher")
+    logger.setLevel(logging.DEBUG)
+    handler = RotatingFileHandler(log_file, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    handler.setFormatter(fmt)
+    logger.addHandler(handler)
+    console = logging.StreamHandler(sys.stdout)
+    console.setFormatter(fmt)
+    logger.addHandler(console)
+    return logger
+
+# ---------- 端口检测 ----------
+def port_in_use(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.settimeout(0.5)
+            s.bind(("localhost", port))
+            return False
+        except OSError:
+            return True
+
+def wait_for_port(port, timeout):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.settimeout(0.5)
+                s.connect(("localhost", port))
+                return True
+            except Exception:
+                time.sleep(0.2)
+    return False
+
+# ---------- Streamlit 子进程管理 ----------
+class StreamlitManager:
+    def __init__(self, cfg, logger):
+        self.cfg = cfg
+        self.logger = logger
+        self.proc = None
+        self.pid_file = os.path.join(os.getcwd(), "streamlit.pid")
+        self.lock = threading.Lock()
+
+    def _read_pid_file(self):
+        if os.path.exists(self.pid_file):
+            try:
+                with open(self.pid_file, "r") as f:
+                    return int(f.read().strip())
+            except Exception:
+                return None
+        return None
+
+    def _is_pid_alive(self, pid):
+        if pid is None:
+            return False
+        try:
+            # Windows 下 os.kill(pid, 0) 不存在，捕获异常即可
+            if os.name == "nt":
+                import psutil
+                return psutil.pid_exists(pid)
+            else:
+                os.kill(pid, 0)
+                return True
+        except Exception:
+            return False
+
+    def is_running(self):
+        with self.lock:
+            if self.proc and self.proc.poll() is None:
+                return True
+            pid = self._read_pid_file()
+            return self._is_pid_alive(pid)
+
+    def start(self):
+        with self.lock:
+            if self.is_running():
+                self.logger.info("Streamlit 已在运行，跳过启动。")
+                return
+            port = int(self.cfg.get("port", 8501))
+            if port_in_use(port):
+                self.logger.warning(f"端口 {port} 已被占用，尝试继续启动（可能是旧实例）。")
+            args = self.cfg.get("streamlit_args", [])
+            script = resource_path("app.py")
+            cmd = [sys.executable, "-m", "streamlit", "run", script, f"--server.port={port}"] + args
+            self.logger.info(f"准备启动 Streamlit: {' '.join(cmd)}")
+            st_log_file = os.path.abspath(self.cfg.get("streamlit_log_file", "streamlit_app.log"))
+            try:
+                f = open(st_log_file, "a", encoding="utf-8")
+            except Exception as e:
+                self.logger.error(f"无法打开 Streamlit 日志文件 {st_log_file}: {e}")
+                f = None
+            # 启动子进程
+            if f:
+                self.proc = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT)
+            else:
+                self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            with open(self.pid_file, "w") as pf:
+                pf.write(str(self.proc.pid))
+            self.logger.info(f"Streamlit 启动，PID={self.proc.pid}")
+
+        # 等待服务可用
+        port = int(self.cfg.get("port", 8501))
+        timeout = float(self.cfg.get("healthcheck_timeout", 10))
+        ok = wait_for_port(port, timeout)
+        if ok:
+            self.logger.info(f"Streamlit 在 http://localhost:{port} 可用。")
+            if self.cfg.get("auto_open_browser", True):
+                try:
+                    webbrowser.open(f"http://localhost:{port}")
+                    self.logger.info("浏览器已打开。")
+                except Exception as e:
+                    self.logger.warning(f"打开浏览器失败：{e}")
+        else:
+            self.logger.warning(f"在 {timeout}s 内未检测到 Streamlit 响应，可能启动失败。")
+
+    def stop(self):
+        with self.lock:
+            self.logger.info("请求停止 Streamlit")
+            stopped = False
+            if self.proc and self.proc.poll() is None:
+                try:
+                    self.proc.terminate()
+                    self.proc.wait(timeout=3)
+                    self.logger.info("通过 proc 成功终止 Streamlit")
+                    stopped = True
+                except Exception:
+                    self.logger.warning("强制 kill Streamlit")
+                    self.proc.kill()
+                    stopped = True
+            else:
+                pid = self._read_pid_file()
+                if pid and self._is_pid_alive(pid):
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                        self.logger.info(f"通过 PID 文件终止 {pid}")
+                        stopped = True
+                    except Exception as e:
+                        self.logger.warning(f"终止时出错: {e}")
+            # 清理 pid 文件
+            try:
+                if os.path.exists(self.pid_file):
+                    os.remove(self.pid_file)
+            except:
+                pass
+            if not stopped:
+                self.logger.info("没发现正在运行的 Streamlit 实例。")
+
+    def status_text(self):
+        return "运行中" if self.is_running() else "已停止"
+
+# ---------- 托盘图标生成 fallback ----------
+def create_image():
+    image = Image.new("RGB", (64, 64), "white")
+    d = ImageDraw.Draw(image)
+    d.rectangle([8, 8, 56, 56], outline="black", width=4)
+    d.text((20, 24), "S", fill="black")
+    return image
+
+# ---------- 托盘 UI 控制 ----------
+class TrayApp:
+    def __init__(self, manager: StreamlitManager, logger):
+        self.manager = manager
+        self.logger = logger
+        self.icon = None
+        self._setup_icon()
+
+    def _build_menu(self):
+        # 状态项用不可点击的 label 显示
+        status_item = pystray.MenuItem(f"状态: {self.manager.status_text()}", lambda _: None, enabled=False)
+        return pystray.Menu(
+            status_item,
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("启动", self.on_start),
+            pystray.MenuItem("停止", self.on_stop),
+            pystray.MenuItem("在浏览器打开", self.on_open),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("退出", self.on_quit),
+        )
+
+    def _setup_icon(self):
+        icon_path = resource_path("icon.ico")
+        if os.path.exists(icon_path):
+            try:
+                image = Image.open(icon_path)
+            except Exception:
+                image = create_image()
+        else:
+            image = create_image()
+        self.icon = pystray.Icon("streamlit_mgr", image, "Streamlit 管理器", self._build_menu())
+
+    def refresh(self):
+        # 更新 tooltip/title 和菜单（状态）
+        try:
+            self.icon.title = f"Streamlit ({self.manager.status_text()})"
+            self.icon.menu = self._build_menu()
+        except Exception as e:
+            self.logger.debug(f"刷新托盘 UI 出错: {e}")
+
+    def on_start(self, icon, item=None):
+        threading.Thread(target=self._start_and_refresh, daemon=True).start()
+
+    def _start_and_refresh(self):
+        self.manager.start()
+        self.refresh()
+
+    def on_stop(self, icon, item=None):
+        threading.Thread(target=self._stop_and_refresh, daemon=True).start()
+
+    def _stop_and_refresh(self):
+        self.manager.stop()
+        self.refresh()
+
+    def on_open(self, icon, item=None):
+        port = self.manager.cfg.get("port", 8501)
+        webbrowser.open(f"http://localhost:{port}")
+
+    def on_quit(self, icon, item=None):
+        self.logger.info("退出请求：先停止 Streamlit 再退出托盘。")
+        self.manager.stop()
+        icon.stop()
+
+    def run(self):
+        self.logger.info("托盘启动")
+        # 启动后台周期更新（更新状态标题/菜单）
+        def periodic():
+            while True:
+                try:
+                    self.refresh()
+                except Exception:
+                    pass
+                time.sleep(5)
+        threading.Thread(target=periodic, daemon=True).start()
+        self.icon.run()
+
+# ---------- 主入口 ----------
+def main():
+    try:
+        cfg = load_config()
+    except Exception as e:
+        print(f"配置加载失败：{e}")
+        return
+
+    log_file = os.path.abspath(cfg.get("log_file", "streamlit_manager.log"))
+    logger = setup_logging(log_file)
+
+    manager = StreamlitManager(cfg, logger)
+    arg = sys.argv[1].lower() if len(sys.argv) >= 2 else None
+
+    if arg == "start":
+        manager.start()
+        return
+    elif arg == "stop":
+        manager.stop()
+        return
+    elif arg == "status":
+        logger.info(f"当前状态: {manager.status_text()}")
+        return
+    else:
+        logger.info("无命令参数/双击运行，进入托盘模式。")
+        manager.start()
+        tray = TrayApp(manager, logger)
+        tray.run()
+
+if __name__ == "__main__":
+    main()
