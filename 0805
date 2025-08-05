@@ -1,4 +1,87 @@
 import os
+import sys
+import threading
+import time
+import subprocess
+from PIL import Image, ImageDraw
+from pystray import Icon, MenuItem, Menu
+import streamlit.web.bootstrap as bootstrap
+
+# 全局变量
+streamlit_thread = None
+app_running = False
+
+
+def get_app_path():
+    # 默认寻找当前目录下的 app.py
+    base_dir = getattr(sys, '_MEIPASS', os.path.abspath("."))
+    return os.path.join(base_dir, "app.py")
+
+
+def run_app():
+    global app_running
+    app_path = get_app_path()
+    if not os.path.exists(app_path):
+        print(f"未找到 app.py: {app_path}")
+        return
+
+    app_running = True
+    bootstrap.run(file=app_path, command_line=None, args=[])
+
+
+def start_app(icon, item):
+    global streamlit_thread, app_running
+    if app_running:
+        return
+    streamlit_thread = threading.Thread(target=run_app, daemon=True)
+    streamlit_thread.start()
+    time.sleep(2)  # 等待 app 启动
+    open_browser()
+
+
+def stop_app(icon, item):
+    global app_running
+    if app_running:
+        os.system("taskkill /F /IM streamlit.exe")
+        app_running = False
+
+
+def exit_app(icon, item):
+    stop_app(icon, item)
+    icon.stop()
+
+
+def open_browser():
+    import webbrowser
+    webbrowser.open("http://localhost:8501")
+
+
+def create_icon():
+    # 生成一个简单托盘图标
+    image = Image.new("RGB", (64, 64), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((16, 16, 48, 48), fill="black")
+    return image
+
+
+def main():
+    # 托盘菜单
+    menu = Menu(
+        MenuItem("启动应用", start_app),
+        MenuItem("停止应用", stop_app),
+        MenuItem("退出", exit_app)
+    )
+    icon = Icon("StreamlitApp", create_icon(), "Streamlit 托盘", menu)
+    icon.run()
+
+
+if __name__ == '__main__':
+    main()
+
+
+
+
+import os
 import subprocess
 import tempfile
 import threading
