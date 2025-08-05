@@ -1,3 +1,41 @@
+import subprocess
+import os
+import sys
+import time
+import threading
+import pystray
+from pystray import MenuItem as item
+from PIL import Image
+
+app_path = os.path.abspath("app.py")
+
+def launch_app():
+    # 注意 shell=True 在 Windows 下是必须的
+    subprocess.Popen(
+        [sys.executable, "-m", "streamlit", "run", app_path, "--server.headless=true"],
+        shell=True
+    )
+
+def stop_app():
+    # 简化处理：找到 streamlit 进程后杀掉
+    os.system("taskkill /f /im streamlit.exe >nul 2>&1")
+
+def setup_tray():
+    icon = pystray.Icon("Streamlit App")
+    image = Image.new("RGB", (64, 64), color=(255, 0, 0))
+    icon.icon = image
+    icon.menu = (
+        item("启动应用", lambda: threading.Thread(target=launch_app).start()),
+        item("停止应用", lambda: stop_app()),
+        item("退出", lambda: icon.stop()),
+    )
+    icon.run()
+
+if __name__ == "__main__":
+    setup_tray()
+
+
+
 import os
 import sys
 import threading
