@@ -1,3 +1,92 @@
+import os
+import io
+import threading
+import tempfile
+import sys
+import yaml
+from pystray import Icon, Menu, MenuItem
+from PIL import Image
+import streamlit.web.bootstrap
+
+# ---------- 内嵌 app.py 逻辑 ----------
+APP_CODE = '''
+import streamlit as st
+
+def main():
+    st.title("内嵌 Streamlit 应用")
+    st.write("这是打包进 exe 中的 streamlit 应用。")
+
+if __name__ == "__main__":
+    main()
+'''
+
+# ---------- 从 YAML 读取配置 ----------
+def load_config():
+    config_file = "config.yaml"
+    if os.path.exists(config_file):
+        with open(config_file, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+    return {}
+
+# ---------- Streamlit 启动线程 ----------
+streamlit_thread = None
+stop_flag = threading.Event()
+
+def run_streamlit():
+    stop_flag.clear()
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as temp_file:
+        temp_file.write(APP_CODE)
+        temp_app_path = temp_file.name
+
+    config = load_config()
+    port = config.get("port", 8501)
+    headless = config.get("headless", True)
+    browser_server_address = config.get("browser_server_address", None)
+
+    args = {
+        "target": temp_app_path,
+        "command_line": ["streamlit", "run", temp_app_path],
+        "args": [],
+        "flag_options": {
+            "server.headless": headless,
+            "server.port": port,
+        },
+        "option_options": {},
+        "remote_server": browser_server_address,
+    }
+
+    streamlit.web.bootstrap.run(**args)
+
+def start_app(icon, item):
+    global streamlit_thread
+    if streamlit_thread and streamlit_thread.is_alive():
+        return
+    streamlit_thread = threading.Thread(target=run_streamlit, daemon=True)
+    streamlit_thread.start()
+
+def stop_app(icon, item):
+    stop_flag.set()
+    os._exit(0)
+
+# ---------- 系统托盘 ----------
+def create_tray():
+    image = Image.open("icon.png") if os.path.exists("icon.png") else Image.new("RGB", (64, 64), color=(0, 0, 0))
+    menu = Menu(
+        MenuItem("启动应用", start_app),
+        MenuItem("退出", stop_app)
+    )
+    Icon("AppTray", image, "Streamlit 内嵌", menu).run()
+
+if __name__ == "__main__":
+    tray_thread = threading.Thread(target=create_tray, daemon=True)
+    tray_thread.start()
+    tray_thread.join()
+
+
+
+
+
+
 import sys
 import os
 import subprocess
