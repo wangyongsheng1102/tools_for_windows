@@ -1,3 +1,46 @@
+import os
+import sys
+import subprocess
+import threading
+from infi.systray import SysTrayIcon
+
+# ✅ 强制导入 streamlit 模块，保证打包进去
+import streamlit
+
+# ✅ 你 app.py 的完整路径
+APP_PATH = os.path.abspath("app.py")
+
+# ✅ 检查是否已经启动了 Streamlit（防止重复启动）
+def is_streamlit_running():
+    import socket
+    try:
+        with socket.create_connection(("localhost", 8501), timeout=1):
+            return True
+    except:
+        return False
+
+def launch_app(systray):
+    if is_streamlit_running():
+        print("Streamlit app already running.")
+        return
+
+    python_exec = sys._MEIPASS + "\\python.exe" if hasattr(sys, "_MEIPASS") else sys.executable
+
+    subprocess.Popen([
+        python_exec,
+        "-m", "streamlit", "run", APP_PATH,
+        "--server.headless=true"
+    ], shell=True)
+
+def quit_app(systray):
+    sys.exit()
+
+menu_options = (("启动应用", None, launch_app),)
+systray = SysTrayIcon("icon.ico", "我的应用", menu_options, on_quit=quit_app)
+systray.start()
+
+
+
 import subprocess
 import os
 import sys
