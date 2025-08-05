@@ -1,4 +1,80 @@
 import os
+import subprocess
+import tempfile
+import threading
+import sys
+from pystray import Icon, Menu, MenuItem
+from PIL import Image, ImageDraw
+
+# 你的内嵌 app.py 代码
+APP_CODE = '''
+import streamlit as st
+
+def main():
+    st.title("内嵌 Streamlit 应用")
+    st.write("这是打包进 exe 中的 streamlit 应用。")
+
+if __name__ == "__main__":
+    main()
+'''
+
+process = None
+
+def start_app(icon=None, item=None):
+    global process
+    if process is not None and process.poll() is None:
+        print("Streamlit 已经运行")
+        return
+    # 写临时 app.py 文件
+    temp = tempfile.NamedTemporaryFile(delete=False, suffix=".py", mode='w', encoding='utf-8')
+    temp.write(APP_CODE)
+    temp.flush()
+    temp.close()
+
+    # 启动streamlit
+    process = subprocess.Popen([
+        sys.executable, "-m", "streamlit", "run", temp.name, "--server.port", "8501"
+    ],
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL)
+
+    print("Streamlit 启动")
+
+def stop_app(icon=None, item=None):
+    global process
+    if process:
+        process.terminate()
+        process.wait(timeout=5)
+        process = None
+        print("Streamlit 停止")
+
+def create_image():
+    image = Image.new('RGB', (64, 64), color='green')
+    d = ImageDraw.Draw(image)
+    d.ellipse((8, 8, 56, 56), fill='yellow')
+    return image
+
+def quit_app(icon, item):
+    stop_app()
+    icon.stop()
+
+def setup_tray():
+    menu = Menu(
+        MenuItem('启动应用', start_app),
+        MenuItem('停止应用', stop_app),
+        MenuItem('退出', quit_app)
+    )
+    icon = Icon("StreamlitLauncher", create_image(), "Streamlit 管理", menu)
+    icon.run()
+
+if __name__ == '__main__':
+    threading.Thread(target=setup_tray).start()
+
+
+
+
+
+import os
 import io
 import threading
 import tempfile
