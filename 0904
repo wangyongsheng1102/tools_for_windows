@@ -1,0 +1,407 @@
+# vb_to_cs.py
+import clr
+import os
+import sys
+
+# ========== 配置：按你本机的 NuGet 包缓存路径与版本来修改 ==========
+nuget_path = os.path.expanduser(r"~\.nuget\packages")
+roslyn_csharp_version = "4.8.0"
+roslyn_vb_version = "4.8.0"
+
+def dll_path(pkg, ver, dll_name):
+    p = os.path.join(nuget_path, pkg, ver, "lib")
+    # try most common frameworks
+    candidates = [
+        os.path.join(p, "net6.0", dll_name),
+        os.path.join(p, "net5.0", dll_name),
+        os.path.join(p, "netstandard2.0", dll_name),
+        os.path.join(p, "netstandard2.1", dll_name),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    # fallback: try any file under lib
+    for root, _, files in os.walk(p):
+        for f in files:
+            if f.lower() == dll_name.lower():
+                return os.path.join(root, f)
+    raise FileNotFoundError(f"Can't find {dll_name} in {p} - please adjust nuget_path or package versions")
+
+# load Roslyn assemblies
+csharp_dll = dll_path("microsoft.codeanalysis.csharp", roslyn_csharp_version, "Microsoft.CodeAnalysis.CSharp.dll")
+core_dll = dll_path("microsoft.codeanalysis.common", roslyn_csharp_version, "Microsoft.CodeAnalysis.dll")
+vb_dll = dll_path("microsoft.codeanalysis.visualbasic", roslyn_vb_version, "Microsoft.CodeAnalysis.VisualBasic.dll")
+
+clr.AddReference(core_dll)
+clr.AddReference(csharp_dll)
+clr.AddReference(vb_dll)
+
+# import needed namespaces
+from Microsoft.CodeAnalysis import SyntaxNode
+from Microsoft.CodeAnalysis.CSharp import SyntaxFactory as CSF, SyntaxKind as CSK
+from Microsoft.CodeAnalysis.CSharp.Syntax import CompilationUnitSyntax as CSCompilationUnit
+from Microsoft.CodeAnalysis.VisualBasic import VisualBasicSyntaxTree, VisualBasicSyntaxKind as VBK
+from Microsoft.CodeAnalysis.VisualBasic.Syntax import (CompilationUnitSyntax as VBCompilationUnit,
+                                                     NamespaceBlockSyntax as VBNamespace,
+                                                     ClassBlockSyntax as VBClass,
+                                                     MethodBlockSyntax as VBMethodBlock,
+                                                     SubStatementSyntax as VBSubStatement,
+                                                     FunctionStatementSyntax as VBFunctionStatement,
+                                                     ParameterSyntax as VBParameter,
+                                                     FieldDeclarationSyntax as VBField,
+                                                     PropertyBlockSyntax as VBPropertyBlock,
+                                                     PropertyStatementSyntax as VBPropertyStatement,
+                                                     LocalDeclarationStatementSyntax as VBLocalDecl,
+                                                     ExpressionStatementSyntax as VBExprStmt,
+                                                     InvocationExpressionSyntax as VBInvocation,
+                                                     IdentifierNameSyntax as VBIdentifier,
+                                                     LiteralExpressionSyntax as VBLiteral,
+                                                     IfBlockSyntax as VBIfBlock,
+                                                     ForEachBlockSyntax as VBForEach,
+                                                     ReturnStatementSyntax as VBReturn,
+                                                     SimpleArgumentSyntax as VBSimpleArg,
+                                                     AssignmentStatementSyntax as VBAssign)
+
+# Helper: check type
+def is_instance(obj, t):
+    return obj is not None and isinstance(obj, t)
+
+# Transformer class
+class VbToCsTransformer:
+    def __init__(self):
+        pass
+
+    def transform_compilation_unit(self, vb_root: VBCompilationUnit):
+        # convert Imports -> using
+        usings = []
+        for imp in vb_root.Imports:
+            # imp.ImportsClause? simple mapping
+            try:
+                name = imp.ImportsClause.Name.ToString()
+                usings.append(CSF.UsingDirective(CSF.ParseName(name)))
+            except Exception:
+                pass
+
+        # members: namespaces or top-level classes
+        cs_members = []
+        for member in vb_root.Members:
+            node = self.transform_member(member)
+            if node is not None:
+                cs_members.append(node)
+
+        cu = CSF.CompilationUnit()
+        for u in usings:
+            cu = cu.AddUsings(u)
+        for m in cs_members:
+            cu = cu.AddMembers(m)
+        return cu.NormalizeWhitespace()
+
+    def transform_member(self, member):
+        # Namespace
+        if is_instance(member, VBNamespace):
+            return self.transform_namespace(member)
+        # top-level class possible: VB may have ClassBlockSyntax
+        if is_instance(member, VBClass):
+            return self.transform_class(member)
+        # others: ignore for now
+        return None
+
+    def transform_namespace(self, ns_block: VBNamespace):
+        name = ns_block.NamespaceStatement.Name.ToString()
+        cs_name = CSF.ParseName(name)
+        # convert members
+        cs_members = []
+        for m in ns_block.Members:
+            t = self.transform_member(m)
+            if t is not None:
+                cs_members.append(t)
+        ns = CSF.NamespaceDeclaration(cs_name).NormalizeWhitespace()
+        for m in cs_members:
+            ns = ns.AddMembers(m)
+        return ns
+
+    def transform_class(self, class_block: VBClass):
+        decl = class_block.BlockStatement
+        name = decl.Identifier.ValueText
+        cs_class = CSF.ClassDeclaration(name).WithModifiers(CSF.TokenList(CSF.Token(CSK.PublicKeyword)))
+        # members
+        cs_members = []
+        for m in class_block.Members:
+            cm = self.transform_class_member(m)
+            if cm is not None:
+                cs_members.append(cm)
+        for m in cs_members:
+            cs_class = cs_class.AddMembers(m)
+        return cs_class
+
+    def transform_class_member(self, m):
+        # Method (Sub / Function)
+        if is_instance(m, VBMethodBlock):
+            return self.transform_method(m)
+        if is_instance(m, VBField):
+            return self.transform_field(m)
+        if is_instance(m, VBPropertyBlock) or is_instance(m, VBPropertyStatement):
+            return self.transform_property(m)
+        # others skip
+        return None
+
+    def transform_field(self, vb_field: VBField):
+        try:
+            # Simplify: get first variable declarator
+            decl = vb_field.Declarators[0]
+            varname = decl.Names[0].Identifier.ValueText
+            # type (if present)
+            typ = "object"
+            if decl.AsClause is not None and decl.AsClause.Type is not None:
+                typ = decl.AsClause.Type.ToString()
+            cs_field = CSF.FieldDeclaration(
+                CSF.VariableDeclaration(CSF.ParseTypeName(typ))
+                .AddVariables(CSF.VariableDeclarator(varname))
+            ).WithModifiers(CSF.TokenList(CSF.Token(CSK.PublicKeyword)))
+            return cs_field
+        except Exception:
+            return None
+
+    def transform_property(self, vb_prop):
+        # Very simplified: create auto-property with inferred type object
+        try:
+            if hasattr(vb_prop, "BlockStatement"):
+                name = vb_prop.BlockStatement.Identifier.ValueText
+            else:
+                # PropertyStatementSyntax
+                name = vb_prop.Identifier.ValueText
+            cs_prop = CSF.PropertyDeclaration(CSF.ParseTypeName("object"), name).WithModifiers(
+                CSF.TokenList(CSF.Token(CSK.PublicKeyword))
+            ).WithAccessorList(
+                CSF.AccessorList(
+                    CSF.List([
+                        CSF.AccessorDeclaration(CSK.GetAccessorDeclaration).WithSemicolonToken(CSF.Token(CSK.SemicolonToken)),
+                        CSF.AccessorDeclaration(CSK.SetAccessorDeclaration).WithSemicolonToken(CSF.Token(CSK.SemicolonToken))
+                    ])
+                )
+            )
+            return cs_prop
+        except Exception:
+            return None
+
+    def transform_method(self, vb_method: VBMethodBlock):
+        # get header (SubStatement or FunctionStatement)
+        header = vb_method.BlockStatement
+        is_function = header.Kind == VBK.FunctionStatement
+        name = header.Identifier.ValueText
+        # parameters
+        cs_params = []
+        for p in header.ParameterList.Parameters:
+            pname = p.Identifier.ValueText
+            ptype = "object"
+            if p.AsClause is not None and p.AsClause.Type is not None:
+                ptype = p.AsClause.Type.ToString()
+            cs_params.append(CSF.Parameter(CSF.Identifier(pname)).WithType(CSF.ParseTypeName(ptype)))
+        param_list = CSF.ParameterList(CSF.SeparatedList(cs_params))
+        ret_type = "void" if not is_function else "object"
+        method_decl = CSF.MethodDeclaration(CSF.ParseTypeName(ret_type), name).WithModifiers(
+            CSF.TokenList(CSF.Token(CSK.PublicKeyword))
+        ).WithParameterList(param_list)
+
+        # Body: transform statements in vb_method.Statements
+        stmts = []
+        for s in vb_method.Statements:
+            cs_stmt = self.transform_statement(s)
+            if cs_stmt is not None:
+                stmts.append(cs_stmt)
+
+        method_decl = method_decl.WithBody(CSF.Block().AddStatements(*stmts))
+        return method_decl
+
+    def transform_statement(self, s):
+        # Local declaration: Dim x As Integer = 1
+        if is_instance(s, VBLocalDecl):
+            # extract first declarator
+            try:
+                decl = s.Declarators[0]
+                varname = decl.Names[0].Identifier.ValueText
+                vtype = "var"
+                if decl.AsClause is not None and decl.AsClause.Type is not None:
+                    vtype = decl.AsClause.Type.ToString()
+                init_expr = None
+                if decl.Initializer is not None:
+                    init_expr = self.transform_expression(decl.Initializer.Value)
+                if init_expr is not None:
+                    return CSF.LocalDeclarationStatement(
+                        CSF.VariableDeclaration(CSF.ParseTypeName(vtype))
+                        .AddVariables(CSF.VariableDeclarator(varname).WithInitializer(CSF.EqualsValueClause(init_expr)))
+                    )
+                else:
+                    return CSF.LocalDeclarationStatement(
+                        CSF.VariableDeclaration(CSF.ParseTypeName(vtype)).AddVariables(CSF.VariableDeclarator(varname))
+                    )
+            except Exception:
+                return None
+
+        # Expression statement
+        if is_instance(s, VBExprStmt):
+            return self.transform_expression_statement(s.Expression)
+
+        # If block
+        if is_instance(s, VBIfBlock):
+            return self.transform_if_block(s)
+
+        # ForEach
+        if is_instance(s, VBForEach):
+            return self.transform_foreach(s)
+
+        # Return
+        if is_instance(s, VBReturn):
+            expr = None
+            if s.Expression is not None:
+                expr = self.transform_expression(s.Expression)
+            if expr is not None:
+                return CSF.ReturnStatement(expr)
+            else:
+                return CSF.ReturnStatement()
+
+        # Assignment
+        if is_instance(s, VBAssign):
+            left = self.transform_expression(s.Left)
+            right = self.transform_expression(s.Right)
+            if left is not None and right is not None:
+                return CSF.ExpressionStatement(CSF.AssignmentExpression(CSK.SimpleAssignmentExpression, left, right))
+
+        return None
+
+    def transform_expression_statement(self, expr):
+        # Invocation or assignment
+        return self.transform_expression(expr) if self.transform_expression(expr) is not None else None
+
+    def transform_expression(self, expr):
+        if expr is None:
+            return None
+        kind = expr.Kind
+        # Invocation
+        if is_instance(expr, VBInvocation):
+            return self.transform_invocation(expr)
+        # Identifier
+        if is_instance(expr, VBIdentifier):
+            return CSF.IdentifierName(expr.Identifier.ValueText)
+        # Literal
+        if is_instance(expr, VBLiteral):
+            token = expr.Token.Text
+            # crude mapping: numeric or string with quotes
+            try:
+                if token.startswith('"') and token.endswith('"'):
+                    return CSF.LiteralExpression(CSK.StringLiteralExpression, CSF.Literal(token.strip('"')))
+                if token.lower() == "true" or token.lower() == "false":
+                    val = token.lower() == "true"
+                    return CSF.LiteralExpression(CSK.TrueLiteralExpression if val else CSK.FalseLiteralExpression)
+                # number
+                return CSF.LiteralExpression(CSK.NumericLiteralExpression, CSF.Literal(int(token)))
+            except Exception:
+                return CSF.LiteralExpression(CSK.StringLiteralExpression, CSF.Literal(token.strip('"')))
+        # Simple argument (like method arg wrapper)
+        if is_instance(expr, VBSimpleArg):
+            return self.transform_expression(expr.Expression)
+
+        # Member access, binary, etc: fallback to parsing text (safer but less structured)
+        try:
+            txt = expr.ToString()
+            parsed = CSF.ParseExpression(txt)
+            return parsed
+        except Exception:
+            return None
+
+    def transform_invocation(self, inv: VBInvocation):
+        # callee
+        try:
+            expr_txt = inv.Expression.ToString()
+            cs_expr = CSF.ParseExpression(expr_txt)
+            # args
+            args = []
+            for a in inv.ArgumentList.Arguments:
+                ae = self.transform_expression(a)
+                if ae is None:
+                    ae = CSF.ParseExpression(a.ToString())
+                args.append(CSF.Argument(ae))
+            return CSF.InvocationExpression(cs_expr).WithArgumentList(CSF.ArgumentList(CSF.SeparatedList(args)))
+        except Exception:
+            # fallback parse whole text
+            try:
+                return CSF.ParseExpression(inv.ToString())
+            except Exception:
+                return None
+
+    def transform_if_block(self, vb_if: VBIfBlock):
+        try:
+            cond = CSF.ParseExpression(vb_if.IfStatement.Condition.ToString())
+            # true block statements -> list
+            true_stmts = []
+            for s in vb_if.Statements:
+                ts = self.transform_statement(s)
+                if ts is not None:
+                    true_stmts.append(ts)
+            # else
+            else_clause = None
+            if vb_if.ElseBlocks.Count > 0:
+                # take first else block
+                else_block = vb_if.ElseBlocks[0]
+                else_stmts = []
+                for s in else_block.Statements:
+                    es = self.transform_statement(s)
+                    if es is not None:
+                        else_stmts.append(es)
+                else_clause = CSF.ElseClause(CSF.Block().AddStatements(*else_stmts))
+            return CSF.IfStatement(cond, CSF.Block().AddStatements(*true_stmts)).WithElse(else_clause)
+        except Exception:
+            return CSF.ParseStatement(vb_if.ToString())
+
+    def transform_foreach(self, vb_for):
+        # ForEach var In collection
+        try:
+            varname = vb_for.ForEachStatement.Identifier.ValueText
+            collection_txt = vb_for.ForEachStatement.Expression.ToString()
+            collection_expr = CSF.ParseExpression(collection_txt)
+            # body stmts
+            body_stmts = []
+            for s in vb_for.Statements:
+                bs = self.transform_statement(s)
+                if bs is not None:
+                    body_stmts.append(bs)
+            return CSF.ForEachStatement(CSF.IdentifierName("var"), CSF.Identifier(varname), collection_expr, CSF.Block().AddStatements(*body_stmts))
+        except Exception:
+            return CSF.ParseStatement(vb_for.ToString())
+
+# ========== demo driver ==========
+if __name__ == "__main__":
+    sample_vb = r'''
+Imports System
+Namespace Demo
+    Public Class Hello
+        Private x As Integer = 1
+
+        Public Property Name As String
+
+        Public Sub Say()
+            Console.WriteLine("Hi " & Name)
+            Dim i As Integer = 10
+            For Each item In New Integer() {1,2,3}
+                Console.WriteLine(item)
+            Next
+            If i > 5 Then
+                Console.WriteLine("big")
+            Else
+                Console.WriteLine("small")
+            End If
+        End Sub
+
+        Public Function Add(a As Integer, b As Integer) As Integer
+            Return a + b
+        End Function
+    End Class
+End Namespace
+'''
+    # parse vb
+    tree = VisualBasicSyntaxTree.ParseText(sample_vb)
+    root = tree.GetRoot()
+    transformer = VbToCsTransformer()
+    cs_cu = transformer.transform_compilation_unit(root)
+    print("=== 转换后的 C# 代码 ===\n")
+    print(cs_cu.ToFullString())
