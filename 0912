@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <title>Main Page</title>
+    <style>
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+        }
+        .modal {
+            background: #fff;
+            width: 400px;
+            margin: 10% auto;
+            padding: 20px;
+            border-radius: 8px;
+            position: relative;
+        }
+        .close-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+<h2>用户列表</h2>
+<table border="1">
+    <thead>
+    <tr>
+        <th>ID</th><th>姓名</th><th>操作</th>
+    </tr>
+    </thead>
+    <tbody>
+    <tr th:each="user : ${users}">
+        <td th:text="${user.id}"></td>
+        <td th:text="${user.name}"></td>
+        <td>
+            <button class="open-modal-btn" th:attr="data-id=${user.id}">编辑</button>
+        </td>
+    </tr>
+    </tbody>
+</table>
+
+<!-- Modal 容器 -->
+<div class="modal-overlay" id="modalOverlay">
+    <div class="modal" id="modalContent">
+        <!-- 这里的内容由 fragment 动态加载 -->
+    </div>
+</div>
+
+<script>
+    // 打开 modal
+    document.querySelectorAll('.open-modal-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            let userId = this.getAttribute('data-id');
+            fetch('/user/modal/' + userId)
+                .then(res => res.text())
+                .then(html => {
+                    document.getElementById('modalContent').innerHTML = html;
+                    document.getElementById('modalOverlay').style.display = 'block';
+                });
+        });
+    });
+
+    // 关闭 modal（委托事件，fragment 里可能也有 close 按钮）
+    document.addEventListener('click', function(e) {
+        if (e.target.classList.contains('close-btn') ||
+            e.target.id === 'modalOverlay') {
+            document.getElementById('modalOverlay').style.display = 'none';
+        }
+    });
+</script>
+
+</body>
+</html>
+
+
+
+
+<div>
+    <span class="close-btn">&times;</span>
+    <h3>编辑用户</h3>
+    <form action="/user/save" method="post">
+        <input type="hidden" name="id" th:value="${user.id}"/>
+        <label>姓名:
+            <input type="text" name="name" th:value="${user.name}"/>
+        </label>
+        <div style="margin-top:10px;">
+            <button type="submit">保存</button>
+        </div>
+    </form>
+</div>
+
+
+
+
+@Controller
+public class UserController {
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @GetMapping("/")
+    public String mainPage(Model model) {
+        model.addAttribute("users", userRepository.findAll());
+        return "main";
+    }
+
+    // 返回 modal 片段
+    @GetMapping("/user/modal/{id}")
+    public String userModal(@PathVariable Long id, Model model) {
+        model.addAttribute("user", userRepository.findById(id).orElse(null));
+        return "fragments/userModal :: fragment"; 
+        // 也可以直接返回 "fragments/userModal"，上面写成 fragment 方便你复用
+    }
+
+    @PostMapping("/user/save")
+    public String saveUser(User user) {
+        userRepository.save(user);
+        return "redirect:/"; // 保存后回到主画面
+    }
+}
+
+
+
+
+
+
