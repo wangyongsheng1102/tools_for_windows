@@ -1,0 +1,231 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        x:Class="PdfVisualDiff.MainWindow"
+        Width="1200" Height="800"
+        Title="PDF Visual Diff">
+
+  <Window.Styles>
+    <!-- 主按钮样式 -->
+    <Style Selector="Button.primary">
+      <Setter Property="Background" Value="#0078D4"/>
+      <Setter Property="Foreground" Value="White"/>
+      <Setter Property="CornerRadius" Value="6"/>
+      <Setter Property="Padding" Value="16,8"/>
+    </Style>
+    <Style Selector="Button.primary:pointerover">
+      <Setter Property="Background" Value="#106EBE"/>
+    </Style>
+
+    <!-- 次要按钮 -->
+    <Style Selector="Button.secondary">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderBrush" Value="#0078D4"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Foreground" Value="#0078D4"/>
+      <Setter Property="CornerRadius" Value="6"/>
+      <Setter Property="Padding" Value="12,6"/>
+    </Style>
+  </Window.Styles>
+
+  <TabControl Margin="8">
+    <!-- ===================  配置页  =================== -->
+    <TabItem Header="Config">
+      <Grid RowDefinitions="*,Auto">
+        <!-- 上方主内容：PDF 选择 + 设置 + 开始比较 -->
+        <StackPanel Grid.Row="0" Margin="24" Spacing="16">
+          <TextBlock Text="PDF 文件选择" FontSize="18" FontWeight="Bold"/>
+
+          <!-- PDF A -->
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="PDF A:" VerticalAlignment="Center"/>
+            <TextBox Text="{Binding PdfAPath}"
+                     IsReadOnly="True"
+                     MinWidth="400"
+                     Watermark="选择第一个 PDF 文件"/>
+            <Button Content="浏览…" Command="{Binding SelectPdfACommand}"/>
+          </StackPanel>
+
+          <!-- PDF B -->
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="PDF B:" VerticalAlignment="Center"/>
+            <TextBox Text="{Binding PdfBPath}"
+                     IsReadOnly="True"
+                     MinWidth="400"
+                     Watermark="选择第二个 PDF 文件"/>
+            <Button Content="浏览…" Command="{Binding SelectPdfBCommand}"/>
+          </StackPanel>
+
+          <!-- 设置 -->
+          <TextBlock Text="比较设置" FontSize="18" FontWeight="Bold" Margin="0,16,0,4"/>
+
+          <StackPanel Orientation="Horizontal" Spacing="32">
+            <!-- DPI 设置 -->
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="DPI:" VerticalAlignment="Center"/>
+              <Slider Minimum="72" Maximum="400"
+                      Value="{Binding Dpi}"
+                      Width="160"/>
+              <TextBlock Text="{Binding Dpi}" VerticalAlignment="Center"/>
+            </StackPanel>
+
+            <!-- 阈值设置 -->
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="阈值:" VerticalAlignment="Center"/>
+              <Slider Minimum="0" Maximum="0.05"
+                      Value="{Binding Threshold}"
+                      Width="160"/>
+              <TextBlock Text="{Binding Threshold, StringFormat=F3}"
+                         VerticalAlignment="Center"/>
+            </StackPanel>
+          </StackPanel>
+
+          <!-- 额外设置（可选） -->
+          <!-- 例如：只比较有内容的页、是否导出 diff 图片等等，可以自己再加 CheckBox -->
+
+          <!-- 开始比较按钮 -->
+          <Button Content="开始比较"
+                  Classes="primary"
+                  Command="{Binding CompareCommand}"
+                  IsEnabled="{Binding CanCompare}"
+                  Margin="0,24,0,0"
+                  HorizontalAlignment="Left"/>
+        </StackPanel>
+
+        <!-- 底部进度条 + 文本 -->
+        <Border Grid.Row="1"
+                Background="#F5F5F5"
+                BorderBrush="#E0E0E0"
+                BorderThickness="1,1,1,0"
+                Padding="12">
+          <StackPanel>
+            <ProgressBar Minimum="0"
+                         Maximum="100"
+                         Height="6"
+                         Value="{Binding Progress}"/>
+            <TextBlock Text="{Binding ProgressText}"
+                       FontSize="12"
+                       Margin="0,4,0,0"/>
+          </StackPanel>
+        </Border>
+      </Grid>
+    </TabItem>
+
+    <!-- ===================  结果页  =================== -->
+    <TabItem Header="Results">
+      <Grid RowDefinitions="Auto,*"
+            ColumnDefinitions="220,*"
+            Margin="4">
+
+        <!-- 顶部：结果概览 + 导出报告 -->
+        <StackPanel Grid.Row="0" Grid.ColumnSpan="2"
+                    Orientation="Horizontal"
+                    Margin="16,8"
+                    Spacing="12">
+          <TextBlock Text="比较结果"
+                     FontSize="18"
+                     FontWeight="Bold"/>
+          <Button Content="导出 HTML 报告"
+                  Classes="secondary"
+                  Command="{Binding ExportHtmlReportCommand}"/>
+          <TextBlock Text="{Binding SummaryText}"
+                     VerticalAlignment="Center"
+                     Margin="16,0,0,0"/>
+        </StackPanel>
+
+        <!-- 左侧：页列表 + 翻页按钮 -->
+        <Border Grid.Row="1" Grid.Column="0"
+                Margin="8"
+                Background="#FAFAFA"
+                BorderBrush="#E0E0E0"
+                BorderThickness="1"
+                CornerRadius="4">
+          <StackPanel Margin="8" Spacing="8">
+            <TextBlock Text="差异页列表"
+                       FontWeight="Bold"/>
+            <ListBox Items="{Binding DiffPages}"
+                     SelectedItem="{Binding SelectedPage}">
+              <ListBox.ItemTemplate>
+                <DataTemplate>
+                  <TextBlock Text="第 {Binding} 页"
+                             Margin="4"/>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+
+            <StackPanel Orientation="Horizontal"
+                        HorizontalAlignment="Center"
+                        Spacing="8"
+                        Margin="0,4,0,0">
+              <Button Content="上一页"
+                      Command="{Binding PrevPageCommand}"
+                      IsEnabled="{Binding CanPrevPage}"/>
+              <TextBlock Text="{Binding CurrentPageDisplay}"
+                         VerticalAlignment="Center"
+                         Margin="4,0"/>
+              <Button Content="下一页"
+                      Command="{Binding NextPageCommand}"
+                      IsEnabled="{Binding CanNextPage}"/>
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <!-- 右侧：当前页预览（A/B/Diff） -->
+        <Grid Grid.Row="1" Grid.Column="1"
+              Margin="8"
+              RowDefinitions="*,*"
+              ColumnDefinitions="*">
+          <!-- 上半：PDF A / PDF B -->
+          <Grid Row="0" ColumnDefinitions="*,*">
+            <StackPanel Margin="8">
+              <TextBlock Text="PDF A"
+                         FontWeight="Bold"
+                         Margin="0,0,0,4"/>
+              <Border Background="#E3F2FD"
+                      BorderBrush="#BBDEFB"
+                      BorderThickness="1"
+                      CornerRadius="4">
+                <Image Source="{Binding SelectedPageImageA}"
+                       Stretch="Uniform"
+                       MaxHeight="260"/>
+              </Border>
+            </StackPanel>
+
+            <StackPanel Margin="8"
+                        Grid.Column="1">
+              <TextBlock Text="PDF B"
+                         FontWeight="Bold"
+                         Margin="0,0,0,4"/>
+              <Border Background="#F3E5F5"
+                      BorderBrush="#E1BEE7"
+                      BorderThickness="1"
+                      CornerRadius="4">
+                <Image Source="{Binding SelectedPageImageB}"
+                       Stretch="Uniform"
+                       MaxHeight="260"/>
+              </Border>
+            </StackPanel>
+          </Grid>
+
+          <!-- 下半：Diff 图 -->
+          <StackPanel Grid.Row="1"
+                      Margin="8">
+            <TextBlock Text="差异预览（带红框）"
+                       FontWeight="Bold"
+                       Margin="0,0,0,4"/>
+            <Border Background="#FFEBEE"
+                    BorderBrush="#FFCDD2"
+                    BorderThickness="1"
+                    CornerRadius="4">
+              <Image Source="{Binding SelectedPageDiffImage}"
+                     Stretch="Uniform"
+                     MaxHeight="260"/>
+            </Border>
+          </StackPanel>
+        </Grid>
+      </Grid>
+    </TabItem>
+  </TabControl>
+</Window>
