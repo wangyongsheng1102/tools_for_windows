@@ -1,4 +1,46 @@
 
+from PyQt5 import QtWidgets, QtGui
+
+def set_dark_fusion_theme(app: QtWidgets.QApplication):
+    """
+    设置 PyQt5 Fusion 风格暗色主题
+    """
+    app.setStyle("Fusion")
+
+    # 定义调色板
+    dark_palette = QtGui.QPalette()
+
+    # 基本背景
+    dark_palette.setColor(QtGui.QPalette.Window, QtGui.QColor(53, 53, 53))
+    dark_palette.setColor(QtGui.QPalette.WindowText, QtGui.QColor(220, 220, 220))
+    dark_palette.setColor(QtGui.QPalette.Base, QtGui.QColor(35, 35, 35))
+    dark_palette.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor(53, 53, 53))
+    dark_palette.setColor(QtGui.QPalette.ToolTipBase, QtGui.QColor(220, 220, 220))
+    dark_palette.setColor(QtGui.QPalette.ToolTipText, QtGui.QColor(220, 220, 220))
+
+    # 文本和按钮
+    dark_palette.setColor(QtGui.QPalette.Text, QtGui.QColor(220, 220, 220))
+    dark_palette.setColor(QtGui.QPalette.Button, QtGui.QColor(53, 53, 53))
+    dark_palette.setColor(QtGui.QPalette.ButtonText, QtGui.QColor(220, 220, 220))
+    dark_palette.setColor(QtGui.QPalette.BrightText, QtGui.QColor(255, 0, 0))
+
+    # 高亮
+    dark_palette.setColor(QtGui.QPalette.Highlight, QtGui.QColor(142, 45, 197))
+    dark_palette.setColor(QtGui.QPalette.HighlightedText, QtGui.QColor(255, 255, 255))
+
+    # 链接
+    dark_palette.setColor(QtGui.QPalette.Link, QtGui.QColor(42, 130, 218))
+
+    app.setPalette(dark_palette)
+
+    # 可选：全局字体
+    font = QtGui.QFont()
+    font.setFamily("Segoe UI")  # 或 "Microsoft YaHei" / "Arial"
+    font.setPointSize(10)
+    app.setFont(font)
+
+
+
 import sys, os, shutil, cv2, numpy as np, fitz, datetime
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
