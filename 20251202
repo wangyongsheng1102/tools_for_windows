@@ -229,3 +229,305 @@
     </TabItem>
   </TabControl>
 </Window>
+
+
+
+
+
+
+
+
+
+import sys
+import os
+import shutil
+import cv2
+import numpy as np
+import base64
+import datetime
+from pdf2image import convert_from_path
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QFont
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QTextEdit, QFileDialog, QTableWidget,
+    QTableWidgetItem, QHeaderView
+)
+
+
+# -------- 工具函数 --------
+
+def timestamp():
+    return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def safe_filename(name):
+    return os.path.splitext(os.path.basename(name))[0]
+
+
+def render_pdf_to_pngs(pdf_path, output_dir):
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+    os.makedirs(output_dir)
+
+    pages = convert_from_path(pdf_path)
+    paths = []
+
+    for i, page in enumerate(pages):
+        out_path = os.path.join(output_dir, f"{i+1}.png")
+        page.save(out_path, "PNG")
+        paths.append(out_path)
+
+    return paths
+
+
+def compute_diff(imgA_path, imgB_path, diff_save_path):
+    imgA = cv2.imread(imgA_path)
+    imgB = cv2.imread(imgB_path)
+
+    if imgA is None or imgB is None:
+        return 0, False
+
+    # 统一尺寸
+    h = min(imgA.shape[0], imgB.shape[0])
+    w = min(imgA.shape[1], imgB.shape[1])
+    imgA = cv2.resize(imgA, (w, h))
+    imgB = cv2.resize(imgB, (w, h))
+
+    diff = cv2.absdiff(imgA, imgB)
+    gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 30, 255, cv2.THRESH_BINARY)
+
+    # 找差异区域轮廓
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    diff_count = len(contours)
+
+    if diff_count > 0:
+        for c in contours:
+            x, y, w, h = cv2.boundingRect(c)
+            cv2.rectangle(imgB, (x, y), (x+w, y+h), (0, 0, 255), 2)
+
+        cv2.imwrite(diff_save_path, imgB)
+
+    return diff_count, diff_count > 0
+
+
+
+# --------- HTML 报告生成 ---------
+
+def export_html(diff_folder, results, pdfA_name, pdfB_name, out_html):
+    lines = []
+    lines.append("<html><head><meta charset='utf-8'>")
+    lines.append("<style>")
+    lines.append("body { background:#222; color:#ddd; font-family:Arial; }")
+    lines.append(".card { border:1px solid #444; padding:15px; margin:10px; background:#333; }")
+    lines.append("img { max-width:100%; border:1px solid #666; }")
+    lines.append("</style></head><body>")
+    lines.append(f"<h1>PDF 比较报告：{pdfA_name} vs {pdfB_name}</h1>")
+
+    for page, diff_count in results:
+        if diff_count == 0:
+            continue
+        diff_png = os.path.join(diff_folder, f"{page}.png")
+        lines.append("<div class='card'>")
+        lines.append(f"<h2>第 {page} 页 - 差异 {diff_count} 处</h2>")
+        lines.append(f"<img src=\"{diff_png}\">")
+        lines.append("</div>")
+
+    lines.append("</body></html>")
+
+    with open(out_html, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+
+
+# -------- 主窗口(UI) --------
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("PDF 差异比较工具")
+        self.resize(1200, 800)
+
+        self.pdfA = None
+        self.pdfB = None
+
+        main = QWidget()
+        layout = QVBoxLayout(main)
+
+        top = QHBoxLayout()
+        self.labelA = QLabel("拖拽PDF A到此区域")
+        self.labelB = QLabel("拖拽PDF B到此区域")
+        for lbl in (self.labelA, self.labelB):
+            lbl.setAcceptDrops(True)
+            lbl.setStyleSheet("border:2px dashed #aaa; padding:40px;")
+            lbl.setAlignment(Qt.AlignCenter)
+        top.addWidget(self.labelA)
+        top.addWidget(self.labelB)
+
+        layout.addLayout(top)
+
+        # table
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["页码", "一致？", "差异数量"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(self.table)
+
+        # buttons
+        btn_area = QHBoxLayout()
+        self.btn_compare = QPushButton("开始比较")
+        self.btn_report = QPushButton("导出报告")
+        btn_area.addWidget(self.btn_compare)
+        btn_area.addWidget(self.btn_report)
+        layout.addLayout(btn_area)
+
+        # info
+        self.info = QTextEdit()
+        self.info.setReadOnly(True)
+        layout.addWidget(self.info)
+
+        self.setCentralWidget(main)
+
+        # signals
+        self.btn_compare.clicked.connect(self.run_compare)
+        self.btn_report.clicked.connect(self.export_report)
+
+        # comparison results
+        self.results = []
+        self.diff_folder = None
+
+
+    # ----------- drag & drop ------------
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasUrls():
+            e.accept()
+        else:
+            e.ignore()
+
+    def dropEvent(self, e):
+        file_path = e.mimeData().urls()[0].toLocalFile()
+        if not file_path.lower().endswith(".pdf"):
+            return
+
+        # decide target
+        cursor = self.childAt(self.mapFromGlobal(e.globalPos()))
+        if cursor is self.labelA:
+            self.pdfA = file_path
+            self.labelA.setText(os.path.basename(file_path))
+        elif cursor is self.labelB:
+            self.pdfB = file_path
+            self.labelB.setText(os.path.basename(file_path))
+
+
+    # ------------- log ----------
+    def log(self, msg):
+        self.info.append(msg)
+        self.info.ensureCursorVisible()
+
+
+    # ------------- Compare ----------------
+    def run_compare(self):
+        if not self.pdfA or not self.pdfB:
+            self.log("请先拖拽两个 PDF")
+            return
+
+        nameA = safe_filename(self.pdfA)
+        nameB = safe_filename(self.pdfB)
+
+        tmpA = "render_a"
+        tmpB = "render_b"
+
+        self.log("开始渲染 PDF A ...")
+        pagesA = render_pdf_to_pngs(self.pdfA, tmpA)
+        self.log("开始渲染 PDF B ...")
+        pagesB = render_pdf_to_pngs(self.pdfB, tmpB)
+
+        pageCount = min(len(pagesA), len(pagesB))
+
+        self.table.setRowCount(0)
+        self.results = []
+
+        # diff 输出目录
+        ts = timestamp()
+        self.diff_folder = f"diff_{nameA}_vs_{nameB}_{ts}"
+        os.makedirs(self.diff_folder, exist_ok=True)
+
+        self.log("开始比较...")
+
+        for i in range(pageCount):
+            page = i + 1
+            imgA = pagesA[i]
+            imgB = pagesB[i]
+            diff_path = os.path.join(self.diff_folder, f"{page}.png")
+
+            diff_count, has_diff = compute_diff(imgA, imgB, diff_path)
+
+            # update table
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            self.table.setItem(row, 0, QTableWidgetItem(str(page)))
+            self.table.setItem(row, 1, QTableWidgetItem("否" if has_diff else "是"))
+            self.table.setItem(row, 2, QTableWidgetItem(str(diff_count)))
+
+            self.results.append((page, diff_count))
+
+            self.log(f"第 {page} 页比较结束，差异 {diff_count} 处")
+
+        # 删除渲染 PNG
+        shutil.rmtree(tmpA)
+        shutil.rmtree(tmpB)
+
+        self.log("比较完成！")
+
+
+    # ---------------- export HTML ----------------
+    def export_report(self):
+        if not self.results or not self.diff_folder:
+            self.log("没有比较结果，无法导出报告")
+            return
+
+        nameA = safe_filename(self.pdfA)
+        nameB = safe_filename(self.pdfB)
+        ts = timestamp()
+
+        html = f"report_{nameA}_vs_{nameB}_{ts}.html"
+        export_html(self.diff_folder, self.results, nameA, nameB, html)
+
+        self.log(f"HTML 报告已导出：{html}")
+
+
+# ---------- run ----------
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    w = MainWindow()
+    w.show()
+    sys.exit(app.exec_())
+
+
+
+
+import fitz  # pip install pymupdf
+
+def render_pdf_to_pngs(pdf_path, output_dir, zoom=2.0):
+    """
+    使用 PyMuPDF 将 PDF 按页渲染为 PNG
+    zoom=2.0 表示 144 DPI（默认 72dpi × 2）
+    """
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+    os.makedirs(output_dir)
+
+    doc = fitz.open(pdf_path)
+    paths = []
+
+    mat = fitz.Matrix(zoom, zoom)  # 放大倍数
+
+    for i in range(len(doc)):
+        page = doc.load_page(i)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        out_path = os.path.join(output_dir, f"{i + 1}.png")
+        pix.save(out_path)
+        paths.append(out_path)
+
+    doc.close()
+    return paths
