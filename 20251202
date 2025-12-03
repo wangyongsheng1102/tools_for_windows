@@ -1,5 +1,28 @@
 
 
+
+import re
+import sqlparse
+
+def remove_inline_sql_comments(sql):
+    # 精确匹配：--后面到下一个逗号、空格、换行等SQL分隔符
+    # 支持 --xxx 和 -- xxx 两种情况
+    sql = re.sub(r'--\s*\w*\s*(?=[,;\s\n])', '', sql)
+    # 清理多余空格
+    sql = re.sub(r'\s+', ' ', sql)
+    return sqlparse.format(sql.strip(), reindent=True, keyword_case='upper')
+
+# 测试你的格式
+raw_sql = "select -- xxx field1, --xxxx field2, -- yyy field3 from users where id=1"
+clean_sql = remove_inline_sql_comments(raw_sql)
+print(clean_sql)
+
+
+
+
+
+
+
 def remove_inline_comments(sql):
     # 匹配 -- 后到下一个SQL关键字/操作符为止
     sql = re.sub(r'--\s*(?![*/])[^ \t\n\r,();=<>!]*?(?=\s+(AND|OR|WHERE|FROM|JOIN|ON|[(),;])|\s*$)', '', sql, flags=re.IGNORECASE)
