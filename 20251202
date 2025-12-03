@@ -1,4 +1,298 @@
+import sys, os, shutil, cv2, numpy as np, fitz, datetime, re
+from PyQt5 import QtWidgets, QtGui
+from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                             QLabel, QPushButton, QTextEdit, QTableWidget, QTableWidgetItem,
+                             QHeaderView, QDialog, QFormLayout, QSpinBox, QDoubleSpinBox,
+                             QDialogButtonBox, QProgressBar)
+from PyQt5.QtCore import Qt
 
+# ---------------- 工具函数 ----------------
+def timestamp(): return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+def safe_filename(name):
+    base = os.path.splitext(os.path.basename(name))[0]
+    return re.sub(r"[^\w\d_-]", "_", base)
+
+def render_pdf_to_pngs(pdf_path, output_dir, zoom=2.0):
+    if os.path.exists(output_dir): shutil.rmtree(output_dir)
+    os.makedirs(output_dir)
+    doc = fitz.open(pdf_path)
+    paths = []
+    mat = fitz.Matrix(zoom, zoom)
+    for i in range(len(doc)):
+        page = doc.load_page(i)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        out_path = os.path.join(output_dir, f"{i+1}.png")
+        try:
+            pix.save(out_path)
+            paths.append(out_path)
+        except Exception as e:
+            print(f"[保存异常] 第 {i+1} 页: {out_path}, {e}")
+    doc.close()
+    return paths
+
+def compute_diff(imgA_path, imgB_path, diff_save_path, threshold=30):
+    imgA = cv2.imread(imgA_path)
+    imgB = cv2.imread(imgB_path)
+    if imgA is None or imgB is None:
+        print(f"[读取失败] imgA: {imgA_path}, imgB: {imgB_path}")
+        return 0, False
+    h, w = min(imgA.shape[0], imgB.shape[0]), min(imgA.shape[1], imgB.shape[1])
+    imgA = cv2.resize(imgA, (w,h))
+    imgB = cv2.resize(imgB, (w,h))
+    diff = cv2.absdiff(imgA,imgB)
+    gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
+    contours,_ = cv2.findContours(thresh,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+    diff_count = len(contours)
+    overlay = imgB.copy(); alpha=0.5
+    for c in contours:
+        x,y,wc,hc = cv2.boundingRect(c)
+        cv2.rectangle(overlay,(x,y),(x+wc,y+hc),(0,0,255),-1)
+    cv2.addWeighted(overlay, alpha, imgB, 1-alpha, 0, imgB)
+    try:
+        os.makedirs(os.path.dirname(diff_save_path), exist_ok=True)
+        cv2.imwrite(diff_save_path,imgB)
+    except Exception as e:
+        print(f"[保存 diff PNG 异常] {diff_save_path}, {e}")
+    return diff_count, diff_count>0
+
+def export_html(diff_folder, results, pdfA_name, pdfB_name, out_html):
+    lines = []
+    lines.append("<html><head><meta charset='utf-8'>")
+    lines.append("<style>")
+    lines.append("body { background:#1e1e1e; color:#ddd; font-family:Arial; padding:20px; }")
+    lines.append(".card { border:1px solid #444; padding:15px; margin:10px; background:#2b2b2b; border-radius:6px; }")
+    lines.append("img { max-width:100%; border:1px solid #666; }")
+    lines.append("a { color:#70a0ff; text-decoration:none; }")
+    lines.append("</style></head><body>")
+    lines.append(f"<h1>PDF 比较报告：{pdfA_name} vs {pdfB_name}</h1>")
+    lines.append("<h2>差异页目录</h2><ul>")
+    for page,diff_count in results:
+        if diff_count==0: continue
+        lines.append(f"<li><a href='#page{page}'>第 {page} 页 - 差异 {diff_count} 处</a></li>")
+    lines.append("</ul>")
+    for page,diff_count in results:
+        diff_png = os.path.join(diff_folder,f"{page}.png")
+        lines.append(f"<div class='card' id='page{page}'>")
+        lines.append(f"<h2>第 {page} 页 - 差异 {diff_count} 处</h2>")
+        if os.path.exists(diff_png):
+            lines.append(f"<img src=\"{diff_png}\">")
+        else:
+            lines.append("<p>diff PNG 未生成</p>")
+        lines.append("</div>")
+    lines.append("</body></html>")
+    with open(out_html,"w",encoding="utf-8") as f: f.write("\n".join(lines))
+
+def cleanup_temp_folders(*folders):
+    for folder in folders:
+        if os.path.exists(folder):
+            try: shutil.rmtree(folder)
+            except Exception as e: print(f"删除失败 {folder}: {e}")
+
+# ---------------- 配置界面 ----------------
+class ConfigDialog(QDialog):
+    def __init__(self,parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("配置")
+        layout = QFormLayout(self)
+        self.dpi_spin = QDoubleSpinBox(); self.dpi_spin.setRange(1.0,5.0); self.dpi_spin.setValue(2.0)
+        layout.addRow("渲染缩放(倍):", self.dpi_spin)
+        self.threshold_spin = QSpinBox(); self.threshold_spin.setRange(1,255); self.threshold_spin.setValue(30)
+        layout.addRow("Diff 阈值:", self.threshold_spin)
+        btns = QDialogButtonBox(QDialogButtonBox.Ok|QDialogButtonBox.Cancel)
+        layout.addWidget(btns)
+        btns.accepted.connect(self.accept); btns.rejected.connect(self.reject)
+
+# ---------------- MainWindow ----------------
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("PDF 比较工具（暗色 Fusion）"); self.resize(1200,800)
+        self.pdfA=[]; self.pdfB=[]
+        self.zoom=2.0; self.threshold=30
+
+        main = QWidget(); layout = QVBoxLayout(main)
+        top = QHBoxLayout()
+        self.labelA = QLabel("拖拽PDF或文件夹 A"); self.labelB = QLabel("拖拽PDF或文件夹 B")
+        for lbl in (self.labelA,self.labelB):
+            lbl.setAcceptDrops(True); lbl.setAlignment(Qt.AlignCenter); lbl.installEventFilter(self)
+        top.addWidget(self.labelA); top.addWidget(self.labelB)
+        layout.addLayout(top)
+
+        self.table = QTableWidget(0,4)
+        self.table.setHorizontalHeaderLabels(["PDF 文件名","页码","一致？","差异数量"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(self.table)
+
+        self.progress_bar = QProgressBar(); layout.addWidget(self.progress_bar)
+        self.info = QTextEdit(); self.info.setReadOnly(True)
+        layout.addWidget(self.info)
+
+        btn_area = QHBoxLayout()
+        self.btn_compare = QPushButton("开始比较"); self.btn_report=QPushButton("导出报告"); self.btn_config=QPushButton("配置")
+        btn_area.addWidget(self.btn_compare); btn_area.addWidget(self.btn_report); btn_area.addWidget(self.btn_config)
+        layout.addLayout(btn_area)
+
+        self.setCentralWidget(main)
+        self.btn_compare.clicked.connect(self.run_compare)
+        self.btn_report.clicked.connect(self.export_report)
+        self.btn_config.clicked.connect(self.show_config)
+
+        # 拖拽样式
+        self.label_style_default = "border:2px dashed #aaa; padding:40px;"
+        self.label_style_drag = "border:2px dashed #4CAF50; background:#333; padding:40px;"
+
+    # ---------------- drag & drop ----------------
+    def eventFilter(self,obj,event):
+        if event.type()==event.DragEnter:
+            obj.setStyleSheet(self.label_style_drag)
+            obj.setText("\n".join([u.toLocalFile() for u in event.mimeData().urls()]))
+            event.accept(); return True
+        elif event.type()==event.DragLeave:
+            obj.setStyleSheet(self.label_style_default)
+            obj.setText("拖拽PDF或文件夹 A" if obj==self.labelA else "拖拽PDF或文件夹 B")
+            return True
+        elif event.type()==event.Drop:
+            obj.setStyleSheet(self.label_style_default)
+            files = [u.toLocalFile() for u in event.mimeData().urls()]
+            pdf_files=[]
+            for f in files:
+                if os.path.isfile(f) and f.lower().endswith(".pdf"):
+                    pdf_files.append(f)
+                elif os.path.isdir(f):
+                    pdf_files.extend([os.path.join(f2,f3) for f3 in os.listdir(f2:=f) if f3.lower().endswith(".pdf")])
+            if obj==self.labelA:
+                self.pdfA = pdf_files
+                obj.setText(f"文件 A，共 {len(pdf_files)} PDF\n{files[0]}" if pdf_files else "拖拽PDF或文件夹 A")
+            else:
+                self.pdfB = pdf_files
+                obj.setText(f"文件 B，共 {len(pdf_files)} PDF\n{files[0]}" if pdf_files else "拖拽PDF或文件夹 B")
+            event.accept(); return True
+        return super().eventFilter(obj,event)
+
+    # ---------------- log ----------------
+    def log(self,msg): self.info.append(msg); self.info.ensureCursorVisible()
+
+    # ---------------- 配置 ----------------
+    def show_config(self):
+        dlg = ConfigDialog(self)
+        dlg.dpi_spin.setValue(self.zoom); dlg.threshold_spin.setValue(self.threshold)
+        if dlg.exec_():
+            self.zoom = dlg.dpi_spin.value()
+            self.threshold = dlg.threshold_spin.value()
+            self.log(f"配置已更新: zoom={self.zoom}, threshold={self.threshold}")
+
+    # ---------------- compare ----------------
+    def run_compare(self):
+        if not self.pdfA or not self.pdfB:
+            self.log("请先拖拽两个 PDF 或文件夹")
+            return
+
+        pdf_pairs=[]
+        if len(self.pdfA)==1 and len(self.pdfB)==1:
+            name = safe_filename(os.path.basename(self.pdfA[0]))
+            pdf_pairs = [(self.pdfA[0], self.pdfB[0], name)]
+        else:
+            dictA = {safe_filename(f):f for f in self.pdfA}
+            dictB = {safe_filename(f):f for f in self.pdfB}
+            common = sorted(set(dictA.keys()) & set(dictB.keys()))
+            if not common: self.log("没有同名 PDF 文件进行比较"); return
+            pdf_pairs = [(dictA[n], dictB[n], n) for n in common]
+
+        base_dir = os.path.abspath(os.path.dirname(sys.argv[0]))
+        ts = timestamp()
+        self.table.setRowCount(0)
+
+        # 计算整体总页数
+        total_pages = 0
+        pdf_page_counts = {}
+        for fileA, fileB, name in pdf_pairs:
+            docA = fitz.open(fileA)
+            docB = fitz.open(fileB)
+            pageCount = min(len(docA), len(docB))
+            pdf_page_counts[name] = pageCount
+            total_pages += pageCount
+            docA.close(); docB.close()
+        self.progress_bar.setMaximum(total_pages)
+        overall_count = 0
+
+        for fileA, fileB, name in pdf_pairs:
+            results_pdf = []
+            tmpA = os.path.join(base_dir,f"tmpA_{name}_{ts}")
+            tmpB = os.path.join(base_dir,f"tmpB_{name}_{ts}")
+            diff_folder = os.path.join(base_dir,f"diff_{name}_{ts}")
+            os.makedirs(diff_folder,exist_ok=True)
+
+            try:
+                self.log(f"开始渲染 {name} PDF A ...")
+                pagesA = render_pdf_to_pngs(fileA,tmpA,zoom=self.zoom)
+                self.log(f"渲染完成，共 {len(pagesA)} 页")
+                self.log(f"开始渲染 {name} PDF B ...")
+                pagesB = render_pdf_to_pngs(fileB,tmpB,zoom=self.zoom)
+                self.log(f"渲染完成，共 {len(pagesB)} 页")
+            except Exception as e:
+                self.log(f"[渲染异常] {name}: {e}")
+                continue
+
+            pageCount = min(len(pagesA),len(pagesB))
+            for i in range(pageCount):
+                page=i+1
+                diff_path = os.path.join(diff_folder,f"{page}.png")
+                diff_count, has_diff = compute_diff(pagesA[i],pagesB[i],diff_path,threshold=self.threshold)
+                results_pdf.append((page,diff_count))
+                self.update_table(name,page,not has_diff,diff_count)
+                self.log(f"{name} 第 {page} 页比较结束，差异 {diff_count} 处")
+                overall_count += 1
+                self.progress_bar.setValue(overall_count)
+
+            html_report = os.path.join(base_dir,f"report_{name}_{ts}.html")
+            export_html(diff_folder,results_pdf,name,name,html_report)
+            self.log(f"{name} HTML 报告生成：{html_report}")
+
+            cleanup_temp_folders(tmpA,tmpB)
+
+        self.log("所有比较完成！")
+
+    def update_table(self,pdf_name,page,same,diff_count):
+        row=self.table.rowCount(); self.table.insertRow(row)
+        self.table.setItem(row,0,QTableWidgetItem(pdf_name))
+        self.table.setItem(row,1,QTableWidgetItem(str(page)))
+        item_status = QTableWidgetItem("是" if same else "否")
+        item_count = QTableWidgetItem(str(diff_count))
+        if not same:
+            item_status.setBackground(QtGui.QColor(255,50,50))
+            item_count.setBackground(QtGui.QColor(255,50,50))
+        self.table.setItem(row,2,item_status)
+        self.table.setItem(row,3,item_count)
+
+    def export_report(self):
+        self.log("每个 PDF 已单独生成 HTML 报告")
+
+# ---------------- Fusion 暗色主题 ----------------
+def set_dark_fusion_theme(app: QtWidgets.QApplication):
+    app.setStyle("Fusion")
+    palette = QtGui.QPalette()
+    palette.setColor(QtGui.QPalette.Window, QtGui.QColor(53,53,53))
+    palette.setColor(QtGui.QPalette.WindowText, QtGui.QColor(220,220,220))
+    palette.setColor(QtGui.QPalette.Base, QtGui.QColor(35,35,35))
+    palette.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor(53,53,53))
+    palette.setColor(QtGui.QPalette.ToolTipBase, QtGui.QColor(220,220,220))
+    palette.setColor(QtGui.QPalette.ToolTipText, QtGui.QColor(220,220,220))
+    palette.setColor(QtGui.QPalette.Text, QtGui.QColor(220,220,220))
+    palette.setColor(QtGui.QPalette.Button, QtGui.QColor(53,53,53))
+    palette.setColor(QtGui.QPalette.ButtonText, QtGui.QColor(220,220,220))
+    palette.setColor(QtGui.QPalette.BrightText, QtGui.QColor(255,0,0))
+    palette.setColor(QtGui.QPalette.Highlight, QtGui.QColor(142,45,197))
+    palette.setColor(QtGui.QPalette.HighlightedText, QtGui.QColor(255,255,255))
+    app.setPalette(palette)
+
+# ---------------- run ----------------
+if __name__=="__main__":
+    app=QtWidgets.QApplication(sys.argv)
+    set_dark_fusion_theme(app)
+    w=MainWindow()
+    w.show()
+    sys.exit(app.exec_())
 
 
 import sys, os, shutil, cv2, numpy as np, fitz, datetime, re
