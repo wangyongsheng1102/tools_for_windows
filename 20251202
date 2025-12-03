@@ -1,5 +1,17 @@
 
 
+def remove_inline_comments(sql):
+    # 匹配 -- 后到下一个SQL关键字/操作符为止
+    sql = re.sub(r'--\s*(?![*/])[^ \t\n\r,();=<>!]*?(?=\s+(AND|OR|WHERE|FROM|JOIN|ON|[(),;])|\s*$)', '', sql, flags=re.IGNORECASE)
+    return sql
+
+raw_sql = "select * from t1 --注1 join t2 --注2 on id=1 --注3 where active=1"
+print(remove_inline_comments(raw_sql))
+
+
+
+
+
 def export_html(diff_folder, results_pdf, pdfA_name, pdfB_name, output_html):
     # 提取仅有差异的页
     diff_pages = [r for r in results_pdf if r[1] > 0]
