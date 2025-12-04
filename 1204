@@ -1,5 +1,51 @@
 
 
+
+import xlwings as xw
+
+# 打开 Excel（保留宏）
+wb = xw.Book(r'C:\path\to\your_file.xlsm')
+
+for sheet in wb.sheets:
+    # 读取 print area
+    print_area = sheet.api.PageSetup.PrintArea  # 返回类似 "A1:F20"
+    if not print_area:
+        continue
+    
+    # 解析 print_area
+    start_cell, end_cell = print_area.split(':')
+    start_row = sheet.range(start_cell).row
+    start_col = sheet.range(start_cell).column
+    end_row = sheet.range(end_cell).row
+    end_col = sheet.range(end_cell).column
+
+    # 1. 删除 print area 下面所有多余行
+    last_row = sheet.cells.last_cell.row
+    if end_row < last_row:
+        sheet.range(f"{end_row+1}:{last_row}").api.Delete()
+
+    # 2. 删除 print area 外的单元格线（Borders）
+    # 遍历整个 sheet 清空边框
+    used_range = sheet.used_range
+    for cell in used_range:
+        cell.api.Borders.LineStyle = -4142  # xlLineStyleNone
+
+    # 3. 第六行到 print area 下面，n列和y列右侧加线
+    n_col = 4  # 假设 N 列是第4列
+    y_col = 7  # 假设 Y 列是第7列
+    for row in range(6, end_row+1):
+        sheet.range((row, n_col)).api.Borders(10).LineStyle = 1  # xlEdgeRight
+        sheet.range((row, y_col)).api.Borders(10).LineStyle = 1  # xlEdgeRight
+
+# 保存
+wb.save()
+wb.close()
+
+
+
+
+
+
 import xlwings as xw
 
 def clear_border_outside_print_area(path):
