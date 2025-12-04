@@ -1,3 +1,36 @@
+import xlwings as xw
+
+def format_by_print_area(path):
+    wb = xw.Book(path)
+    ws = wb.sheets["Sheet1"]
+
+    # 取打印区域（形如 "$A$1:$Y$632"）
+    print_area = ws.api.PageSetup.PrintArea
+    if not print_area:
+        raise RuntimeError("未设置打印区域")
+
+    # 去掉美元符号
+    area = print_area.replace("$", "")
+    rng = ws.range(area)
+
+    # 1. 全表清边框
+    ws.used_range.api.Borders.LineStyle = 0  # xlLineStyleNone
+
+    # 2. 打印区域加细边框
+    rng.api.Borders.LineStyle = 1   # xlContinuous
+    rng.api.Borders.Weight = 2      # xlThin
+
+    # 3. 删除打印区域下方行
+    last_row = ws.used_range.last_cell.row
+    bottom_row = rng.last_cell.row
+    if last_row > bottom_row:
+        ws.range(f"{bottom_row+1}:{last_row}").delete()
+
+    wb.save()
+    if len(wb.app.books) == 1:
+        wb.app.quit()
+    else:
+        wb.close()
 
 
 from openpyxl import load_workbook
