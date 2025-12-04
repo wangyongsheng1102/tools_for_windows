@@ -1,6 +1,106 @@
 
 
 
+import os
+import xlwings as xw
+
+def format_excel(file_path, n_col=4, y_col=7):
+    """
+    修改 Excel：
+    1. 遍历所有 sheet
+    2. 删除 print area 下方多余行
+    3. 删除 print area 外的边框
+    4. 第 6 行到 print area 最下面，n_col 和 y_col 右侧加边框
+    保留 VBA 宏
+    n_col, y_col: 指定列数字（例如 N列=14, Y列=25）
+    """
+    print(f"处理文件: {file_path}")
+    wb = xw.Book(file_path)
+
+    for ws in wb.sheets:
+        # 获取打印区域
+        print_area = ws.api.PageSetup.PrintArea
+        if not print_area:
+            print(f"Sheet {ws.name} 未设置打印区域，跳过")
+            continue
+
+        area = print_area.replace("$", "")
+        rng = ws.range(area)
+
+        # sheet 使用范围
+        used = ws.used_range
+        used_first_row = used.row
+        used_last_row = used.last_cell.row
+        used_first_col = used.column
+        used_last_col = used.last_cell.column
+
+        # 打印区域范围
+        rng_first_row = rng.row
+        rng_last_row = rng.last_cell.row
+        rng_first_col = rng.column
+        rng_last_col = rng.last_cell.column
+
+        # 1️⃣ 清除打印区域外边框（四块）
+        if used_first_row < rng_first_row:
+            ws.range(
+                (used_first_row, used_first_col),
+                (rng_first_row - 1, used_last_col)
+            ).api.Borders.LineStyle = 0
+        if rng_last_row < used_last_row:
+            ws.range(
+                (rng_last_row + 1, used_first_col),
+                (used_last_row, used_last_col)
+            ).api.Borders.LineStyle = 0
+        if used_first_col < rng_first_col:
+            ws.range(
+                (rng_first_row, used_first_col),
+                (rng_last_row, rng_first_col - 1)
+            ).api.Borders.LineStyle = 0
+        if rng_last_col < used_last_col:
+            ws.range(
+                (rng_first_row, rng_last_col + 1),
+                (rng_last_row, used_last_col)
+            ).api.Borders.LineStyle = 0
+
+        # 2️⃣ 删除打印区域下方多余行
+        if used_last_row > rng_last_row:
+            ws.range(f"{rng_last_row+1}:{used_last_row}").api.Delete()
+
+        # 3️⃣ 第 6 行到打印区域最后一行，指定列右侧加线
+        for row in range(6, rng_last_row + 1):
+            for col in [n_col, y_col]:
+                if col <= used_last_col:  # 防止列越界
+                    ws.range((row, col)).api.Borders(10).LineStyle = 1  # xlEdgeRight
+
+    # 保存并关闭
+    wb.save()
+    if len(wb.app.books) == 1:
+        wb.app.quit()
+    else:
+        wb.close()
+
+
+def process_folder(root_path, n_col=4, y_col=7):
+    """
+    遍历 root_path 下所有子文件夹，找到以 aaa 开头的 xlsm 文件并处理
+    """
+    for dirpath, dirnames, filenames in os.walk(root_path):
+        for file in filenames:
+            if file.lower().endswith(".xlsm") and file.startswith("aaa"):
+                file_path = os.path.join(dirpath, file)
+                format_excel(file_path, n_col, y_col)
+
+
+if __name__ == "__main__":
+    root_folder = r"C:\path\to\root_folder"  # 修改为你的根目录
+    n_col = 14  # N列
+    y_col = 25  # Y列
+    process_folder(root_folder, n_col, y_col)
+
+
+
+
+
 import xlwings as xw
 
 wb = xw.Book(r'C:\path\to\your_file.xlsm')
