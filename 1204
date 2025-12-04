@@ -3,6 +3,56 @@
 
 import xlwings as xw
 
+wb = xw.Book(r'C:\path\to\your_file.xlsm')
+
+for sheet in wb.sheets:
+    # 获取 print area
+    print_area = sheet.api.PageSetup.PrintArea  # "A1:F20"
+    if not print_area:
+        continue
+
+    # 解析 print area
+    start_cell, end_cell = print_area.split(':')
+    start_row = sheet.range(start_cell).row
+    start_col = sheet.range(start_cell).column
+    end_row = sheet.range(end_cell).row
+    end_col = sheet.range(end_cell).column
+
+    # sheet 最大行列
+    max_row = sheet.cells.last_cell.row
+    max_col = sheet.cells.last_cell.column
+
+    # 1️⃣ 删除 print area 下方多余行
+    if end_row < max_row:
+        sheet.range(f"{end_row+1}:{max_row}").api.Delete()
+
+    # 2️⃣ 清除 print area 之外的边框
+    # 遍历整个 sheet
+    for row in range(1, max_row + 1):
+        for col in range(1, max_col + 1):
+            # 判断是否在 print area 内
+            if start_row <= row <= end_row and start_col <= col <= end_col:
+                continue  # 保留 print area 内的边框
+            cell = sheet.range((row, col))
+            cell.api.Borders.LineStyle = -4142  # xlLineStyleNone
+
+    # 3️⃣ 第六行到 print area 最下方，指定列右边加线
+    n_col = 4  # 假设 N 列是第 4 列
+    y_col = 7  # 假设 Y 列是第 7 列
+    for row in range(6, end_row + 1):
+        for col in [n_col, y_col]:
+            sheet.range((row, col)).api.Borders(10).LineStyle = 1  # xlEdgeRight
+
+# 保存
+wb.save()
+wb.close()
+
+
+
+
+
+import xlwings as xw
+
 # 打开 Excel（保留宏）
 wb = xw.Book(r'C:\path\to\your_file.xlsm')
 
