@@ -1,0 +1,64 @@
+import re
+
+def strip_comments(sql: str) -> str:
+    sql = re.sub(r'/\*.*?\*/', '', sql, flags=re.S)
+    sql = re.sub(r'--.*?(?=$)', '', sql)
+    return sql.strip()
+
+def extract_sql_php(line: str) -> str:
+    # 去掉前缀：[pa 15326 0] - 或其他
+    sql = re.sub(r'^\[.*?\]\s*-?\s*', '', line)
+    sql = strip_comments(sql)
+    return sql
+
+def extract_sql_java(lines: list[str]) -> list[str]:
+    cleaned = []
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+
+        if line.startswith("Preparing:"):
+            sql = line.replace("Preparing:", "").strip()
+            sql = strip_comments(sql)
+            sql = sql.replace('\n', ' ')
+
+            params = []
+            # 下一行如果是参数
+            if i + 1 < len(lines) and "Parameters:" in lines[i+1]:
+                p = re.sub(r'^.*?Parameters:\s*', '', lines[i+1]).strip()
+                arr = p.split(',')
+                for a in arr:
+                    val = a.rsplit('(', 1)[0].strip()
+                    params.append(val)
+                i += 1
+
+            for p in params:
+                sql = sql.replace('?', f"'{p}'", 1)
+
+            cleaned.append(sql)
+
+        i += 1
+    return cleaned
+
+def compare_sql(list1, list2):
+    # 按顺序比较（你要求的）
+    diffs = []
+    for i in range(max(len(list1), len(list2))):
+        v1 = list1[i] if i < len(list1) else ""
+        v2 = list2[i] if i < len(list2) else ""
+        if v1 != v2:
+            diffs.append((i + 1, v1, v2))
+    return diffs
+
+# ---------------- 入口函数 ----------------
+
+def process_files(php_file, java_file, out_php, out_java):
+    php_sqls = [extract_sql_php(l) for l in open(php_file, encoding="utf8")]
+    java_sqls = extract_sql_java(open(java_file, encoding="utf8").readlines())
+
+    # 输出清洗后的文件
+    open(out_php, "w", encoding="utf8").write("\n".join(php_sqls))
+    open(out_java, "w", encoding="utf8").write("\n".join(java_sqls))
+
+    diffs = compare_sql(php_sqls, java_sqls)
+    return diffs
