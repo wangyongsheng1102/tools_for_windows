@@ -1,3 +1,75 @@
+
+
+import xlwings as xw
+
+def clear_border_outside_print_area(path):
+    wb = xw.Book(path)
+    ws = wb.sheets["Sheet1"]
+
+    # 1. 取打印区域（如 "$A$1:$Y$632"）
+    print_area = ws.api.PageSetup.PrintArea
+    if not print_area:
+        raise RuntimeError("未设置打印区域")
+
+    # 去掉$
+    area = print_area.replace("$", "")
+    rng = ws.range(area)
+
+    # 2. 先记下打印区域的行列范围
+    used = ws.used_range
+    used_first_row = used.row
+    used_last_row = used.last_cell.row
+    used_first_col = used.column
+    used_last_col = used.last_cell.column
+
+    rng_first_row = rng.row
+    rng_last_row = rng.last_cell.row
+    rng_first_col = rng.column
+    rng_last_col = rng.last_cell.column
+
+    # 3. 分四块清边框：上、下、左、右，只清范围外
+    # 上方区域
+    if used_first_row < rng_first_row:
+        ws.range(
+            (used_first_row, used_first_col),
+            (rng_first_row - 1, used_last_col)
+        ).api.Borders.LineStyle = 0  # xlLineStyleNone
+
+    # 下方区域
+    if rng_last_row < used_last_row:
+        ws.range(
+            (rng_last_row + 1, used_first_col),
+            (used_last_row, used_last_col)
+        ).api.Borders.LineStyle = 0
+
+    # 左侧区域（与打印区域行上下对齐）
+    if used_first_col < rng_first_col:
+        ws.range(
+            (rng_first_row, used_first_col),
+            (rng_last_row, rng_first_col - 1)
+        ).api.Borders.LineStyle = 0
+
+    # 右侧区域
+    if rng_last_col < used_last_col:
+        ws.range(
+            (rng_first_row, rng_last_col + 1),
+            (rng_last_row, used_last_col)
+        ).api.Borders.LineStyle = 0
+
+    # 4. 删除打印区域下方多余行（你已经有逻辑的话，这段可以保持不变）
+    if used_last_row > rng_last_row:
+        ws.range(f"{rng_last_row+1}:{used_last_row}").delete()
+
+    wb.save()
+    if len(wb.app.books) == 1:
+        wb.app.quit()
+    else:
+        wb.close()
+
+
+
+
+
 import xlwings as xw
 
 def format_by_print_area(path):
