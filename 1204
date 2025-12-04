@@ -1,3 +1,64 @@
+
+
+from openpyxl import load_workbook
+from openpyxl.styles import Border, Side
+
+def process_by_print_area(path, sheet_name):
+    wb = load_workbook(path)
+    ws = wb[sheet_name]
+
+    # 1. 读取打印区域，比如 "A1:AD60"
+    print_area = ws.print_area
+    if not print_area:
+        raise ValueError("当前工作表没有设置打印区域，请先在 Excel 里设好打印区域（就是蓝色粗框）")
+
+    # openpyxl 把打印区域存成类似 ('A1:AD60',) 的元组
+    area = list(print_area)[0]
+    start, end = area.split(":")
+    from openpyxl.utils import column_index_from_string, get_column_letter
+
+    def parse_addr(addr):
+        # 如 "AD60" -> (列号, 行号)
+        col_str = "".join([c for c in addr if c.isalpha()])
+        row_str = "".join([c for c in addr if c.isdigit()])
+        return column_index_from_string(col_str), int(row_str)
+
+    min_col, min_row = parse_addr(start)
+    max_col, max_row = parse_addr(end)
+
+    # 2. 打印范围内统一设置细边框（让蓝框内格子都连成一体）
+    thin = Border(
+        left=Side(style="thin"),
+        right=Side(style="thin"),
+        top=Side(style="thin"),
+        bottom=Side(style="thin")
+    )
+    for row in ws.iter_rows(min_row=min_row, max_row=max_row,
+                            min_col=min_col, max_col=max_col):
+        for cell in row:
+            cell.border = thin
+
+    # 3. 清除打印范围外所有边框（包括上、下、左、右）
+    for row in ws.iter_rows():
+        for cell in row:
+            if (cell.row < min_row or cell.row > max_row or
+                cell.column < min_col or cell.column > max_col):
+                cell.border = Border()   # 清空边框
+
+    # 4. 删除打印范围下面多余的行（整行删除）
+    #   从最后一行往上删，避免行号变化
+    last_row = ws.max_row
+    for r in range(last_row, max_row, -1):
+        ws.delete_rows(r)
+
+    wb.save(path)
+
+# 使用示例
+if __name__ == "__main__":
+    process_by_print_area("你的表.xlsx", "Sheet1")
+
+
+
 import re
 
 def strip_comments(sql: str) -> str:
