@@ -1,5 +1,120 @@
 
 
+private void ProcessSingleFile(string filePath)
+{
+    total++;
+    UpdateStat();
+
+    Excel.Application app = null;
+    Excel.Workbook wb = null;
+
+    try
+    {
+        Log($"🔹 Start Open: {filePath}");
+
+        app = new Excel.Application
+        {
+            DisplayAlerts = false,
+            Visible = false,
+            AskToUpdateLinks = false,
+            AlertBeforeOverwriting = false
+        };
+
+        // 使用 Task + 超时，避免 Excel 弹窗或卡住线程
+        bool opened = false;
+        var openTask = Task.Run(() =>
+        {
+            wb = app.Workbooks.Open(
+                filePath,
+                UpdateLinks: 0,
+                ReadOnly: false,
+                IgnoreReadOnlyRecommended: true,
+                Notify: false
+            );
+            opened = true;
+        });
+
+        if (!openTask.Wait(TimeSpan.FromSeconds(15))) // 超时 15 秒
+        {
+            Log($"❌ 打开文件超时: {filePath}");
+            failed++;
+            AppendReport(filePath, "Failed", "Open timeout");
+            UpdateStat();
+            return;
+        }
+
+        Log($"✔ Opened: {filePath}");
+
+        // 获取外部链接
+        object linksObj = null;
+        try
+        {
+            linksObj = wb.LinkSources(Excel.XlLink.xlExcelLinks);
+            Log($"🔹 Got LinkSources for {filePath}");
+        }
+        catch (Exception ex)
+        {
+            Log($"❌ LinkSources failed: {ex.Message}");
+        }
+
+        var links = ConvertLinkSourcesToList(linksObj);
+
+        if (links.Count > 0)
+        {
+            Log($"🔗 Found {links.Count} external link(s), removing...");
+            foreach (var l in links)
+            {
+                try
+                {
+                    wb.BreakLink(l, Excel.XlLinkType.xlLinkTypeExcelLinks);
+                    Log($"✔ Removed link: {l}");
+                }
+                catch (Exception ex)
+                {
+                    Log($"❌ Failed to remove link {l}: {ex.Message}");
+                }
+            }
+            success++;
+            AppendReport(filePath, "Success", $"Removed {links.Count} link(s)");
+        }
+        else
+        {
+            Log("ℹ No external links");
+            success++;
+            AppendReport(filePath, "Success", "No external links");
+        }
+
+        wb.Save();
+        Log($"💾 Saved: {filePath}");
+    }
+    catch (Exception ex)
+    {
+        failed++;
+        AppendReport(filePath, "Failed", ex.Message);
+        Log($"❌ Processing failed: {ex.Message}");
+    }
+    finally
+    {
+        UpdateStat();
+
+        if (wb != null)
+        {
+            try { wb.Close(false); } catch { }
+        }
+        if (app != null)
+        {
+            try { app.Quit(); } catch { }
+        }
+
+        ReleaseCom(wb);
+        ReleaseCom(app);
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+    }
+}
+
+
+
 
 using System;
 using System.Collections.Generic;
