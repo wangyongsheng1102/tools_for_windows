@@ -1,3 +1,197 @@
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using Excel = Microsoft.Office.Interop.Excel;
+using System.Runtime.InteropServices;
+
+namespace ExcelLinkCleaner
+{
+    public partial class MainForm : Form
+    {
+        public MainForm()
+        {
+            InitializeComponent();
+            CheckForIllegalCrossThreadCalls = false;
+        }
+
+        private bool _isRunning = false;
+
+        private void btnBrowse_Click(object sender, EventArgs e)
+        {
+            using (var fbd = new FolderBrowserDialog())
+            {
+                if (fbd.ShowDialog() == DialogResult.OK)
+                {
+                    txtFolder.Text = fbd.SelectedPath;
+                }
+            }
+        }
+
+        private void btnStart_Click(object sender, EventArgs e)
+        {
+            if (!Directory.Exists(txtFolder.Text))
+            {
+                Log("❌ 请选择有效的文件夹路径！");
+                return;
+            }
+
+            _isRunning = true;
+            btnStart.Enabled = false;
+            btnStop.Enabled = true;
+
+            Task.Run(() => ProcessFolder(txtFolder.Text));
+        }
+
+        private void btnStop_Click(object sender, EventArgs e)
+        {
+            _isRunning = false;
+            Log("⚠️ 已发送停止指令，正在等待当前文件完成…");
+        }
+
+        private void ProcessFolder(string folder)
+        {
+            try
+            {
+                string[] files = Directory.GetFiles(folder, "aaa*.xlsm", SearchOption.AllDirectories);
+                Log($"📂 检测到 {files.Length} 个 .xlsm 文件待处理");
+
+                foreach (var file in files)
+                {
+                    if (!_isRunning) break;
+                    ProcessSingleFile(file);
+                }
+            }
+            finally
+            {
+                Log("🟢 任务结束");
+                this.Invoke(new Action(() =>
+                {
+                    btnStart.Enabled = true;
+                    btnStop.Enabled = false;
+                }));
+            }
+        }
+
+        private void ProcessSingleFile(string filePath)
+        {
+            Log($"🔍 处理文件：{filePath}");
+
+            Excel.Application app = null;
+            Excel.Workbook wb = null;
+
+            try
+            {
+                app = new Excel.Application
+                {
+                    DisplayAlerts = false,
+                    Visible = false,
+                    AskToUpdateLinks = false,
+                    AlertBeforeOverwriting = false
+                };
+
+                wb = app.Workbooks.Open(filePath, UpdateLinks: 0);
+
+                object linksObj = null;
+                try
+                {
+                    linksObj = wb.LinkSources(Excel.XlLink.xlExcelLinks);
+                }
+                catch
+                {
+                    linksObj = null;
+                }
+
+                var links = ConvertLinkSourcesToList(linksObj);
+
+                if (links.Count > 0)
+                {
+                    Log($"🔗 检测到 {links.Count} 个外部链接，正在删除…");
+
+                    foreach (var l in links)
+                    {
+                        try
+                        {
+                            wb.BreakLink(l, Excel.XlLinkType.xlLinkTypeExcelLinks);
+                            Log($"✔ 删除成功：{l}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"❌ 删除失败 {l}：{ex.Message}");
+                        }
+                    }
+                }
+                else
+                {
+                    Log("ℹ️ 无外部链接");
+                }
+
+                wb.Save();
+                Log($"💾 已保存：{filePath}");
+            }
+            catch (Exception ex)
+            {
+                Log($"❌ 处理失败：{ex.Message}");
+            }
+            finally
+            {
+                if (wb != null) wb.Close(false);
+                if (app != null) app.Quit();
+
+                ReleaseCom(wb);
+                ReleaseCom(app);
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+        }
+
+        private List<string> ConvertLinkSourcesToList(object linksObj)
+        {
+            var result = new List<string>();
+            if (linksObj == null) return result;
+
+            if (linksObj is Array arr)
+            {
+                foreach (var item in arr)
+                {
+                    if (item != null)
+                        result.Add(item.ToString());
+                }
+            }
+            else
+            {
+                result.Add(linksObj.ToString());
+            }
+            return result;
+        }
+
+        private void ReleaseCom(object obj)
+        {
+            if (obj != null)
+            {
+                try { Marshal.ReleaseComObject(obj); }
+                catch { }
+            }
+        }
+
+        private void Log(string msg)
+        {
+            if (txtLog.InvokeRequired)
+            {
+                txtLog.Invoke(new Action(() => txtLog.AppendText(msg + Environment.NewLine)));
+            }
+            else
+            {
+                txtLog.AppendText(msg + Environment.NewLine);
+            }
+        }
+    }
+}
+
+
+
 using System;
 using System.IO;
 using System.Linq;
