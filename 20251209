@@ -1,0 +1,371 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using Excel = Microsoft.Office.Interop.Excel;
+using System.Runtime.InteropServices;
+using System.Collections.Generic;
+
+namespace BatchBreakLinks
+{
+    public class MainForm : Form
+    {
+        private Button btnSelectFolder;
+        private TextBox txtFolder;
+        private Button btnStart;
+        private ProgressBar progressBar;
+        private TextBox txtLog;
+        private CheckBox chkBackup;
+        private Label lblStatus;
+
+        public MainForm()
+        {
+            InitializeComponents();
+        }
+
+        private void InitializeComponents()
+        {
+            this.Text = "Batch Break External Links (.xlsm starting with 'aaa')";
+            this.Width = 800;
+            this.Height = 600;
+            this.StartPosition = FormStartPosition.CenterScreen;
+
+            var lbl = new Label { Left = 12, Top = 14, Text = "Folder:", AutoSize = true };
+            txtFolder = new TextBox { Left = 70, Top = 10, Width = 560 };
+            btnSelectFolder = new Button { Left = 640, Top = 8, Width = 120, Text = "Select Folder" };
+            btnSelectFolder.Click += BtnSelectFolder_Click;
+
+            chkBackup = new CheckBox { Left = 70, Top = 40, Text = "Backup original files (.bak)", Checked = true, AutoSize = true };
+
+            btnStart = new Button { Left = 70, Top = 70, Width = 120, Text = "Start" };
+            btnStart.Click += BtnStart_Click;
+
+            progressBar = new ProgressBar { Left = 200, Top = 70, Width = 560, Height = 24 };
+
+            lblStatus = new Label { Left = 70, Top = 100, Width = 690, Text = "Status: Idle", AutoSize = false };
+
+            txtLog = new TextBox { Left = 12, Top = 130, Width = 760, Height = 420, Multiline = true, ScrollBars = ScrollBars.Vertical, ReadOnly = true };
+
+            this.Controls.Add(lbl);
+            this.Controls.Add(txtFolder);
+            this.Controls.Add(btnSelectFolder);
+            this.Controls.Add(chkBackup);
+            this.Controls.Add(btnStart);
+            this.Controls.Add(progressBar);
+            this.Controls.Add(lblStatus);
+            this.Controls.Add(txtLog);
+        }
+
+        private void BtnSelectFolder_Click(object sender, EventArgs e)
+        {
+            using (var fbd = new FolderBrowserDialog())
+            {
+                if (fbd.ShowDialog() == DialogResult.OK)
+                {
+                    txtFolder.Text = fbd.SelectedPath;
+                }
+            }
+        }
+
+        private async void BtnStart_Click(object sender, EventArgs e)
+        {
+            string folder = txtFolder.Text.Trim();
+            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
+            {
+                MessageBox.Show("Please select a valid folder first.", "Folder not found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            btnStart.Enabled = false;
+            btnSelectFolder.Enabled = false;
+            txtLog.Clear();
+            Log($"Start scanning folder: {folder}");
+            try
+            {
+                await Task.Run(() => ProcessFolder(folder, chkBackup.Checked));
+                Log("All done.");
+            }
+            catch (Exception ex)
+            {
+                Log($"Fatal error: {ex}");
+            }
+            finally
+            {
+                btnStart.Enabled = true;
+                btnSelectFolder.Enabled = true;
+                lblStatus.Text = "Status: Idle";
+                progressBar.Value = 0;
+            }
+        }
+
+        private void Log(string line)
+        {
+            this.Invoke((Action)(() =>
+            {
+                txtLog.AppendText($"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - {line}{Environment.NewLine}");
+                txtLog.SelectionStart = txtLog.Text.Length;
+                txtLog.ScrollToCaret();
+            }));
+        }
+
+        private void SetProgress(int current, int total)
+        {
+            this.Invoke((Action)(() =>
+            {
+                if (total <= 0)
+                {
+                    progressBar.Value = 0;
+                    lblStatus.Text = $"Status: {current}";
+                }
+                else
+                {
+                    progressBar.Maximum = Math.Max(total, 1);
+                    progressBar.Value = Math.Min(current, total);
+                    lblStatus.Text = $"Status: Processing {current}/{total}";
+                }
+            }));
+        }
+
+        private void ProcessFolder(string rootFolder, bool backupOriginal)
+        {
+            // Find all files starting with "aaa" and ending with .xlsm (case-insensitive)
+            var files = Directory.EnumerateFiles(rootFolder, "aaa*.xlsm", SearchOption.AllDirectories).ToList();
+            Log($"Found {files.Count} matching files.");
+
+            int total = files.Count;
+            int current = 0;
+
+            // Create Excel application once, use it for all files to reduce overhead
+            Excel.Application excelApp = null;
+
+            try
+            {
+                excelApp = new Excel.Application
+                {
+                    DisplayAlerts = false,
+                    Visible = false,
+                    AlertBeforeOverwriting = false
+                };
+
+                foreach (var file in files)
+                {
+                    current++;
+                    SetProgress(current, total);
+                    Log($"Processing: {file}");
+
+                    try
+                    {
+                        if (backupOriginal)
+                        {
+                            string bak = file + ".bak";
+                            if (!File.Exists(bak))
+                            {
+                                File.Copy(file, bak);
+                                Log($"Backup created: {bak}");
+                            }
+                            else
+                            {
+                                Log($"Backup already exists: {bak}");
+                            }
+                        }
+
+                        ProcessSingleFileWithExcelInterop(excelApp, file);
+                        Log($"Processed OK: {file}");
+                    }
+                    catch (Exception exFile)
+                    {
+                        Log($"Error processing {file}: {exFile.Message}");
+                    }
+                }
+            }
+            finally
+            {
+                // Quit Excel and release COM
+                if (excelApp != null)
+                {
+                    try
+                    {
+                        excelApp.DisplayAlerts = false;
+                        excelApp.Quit();
+                    }
+                    catch { }
+                    finally
+                    {
+                        Marshal.FinalReleaseComObject(excelApp);
+                    }
+                }
+
+                // Force GC to release COM objects
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+        }
+
+        private void ProcessSingleFileWithExcelInterop(Excel.Application excelApp, string path)
+        {
+            Excel.Workbook wb = null;
+            object linksObj = null;
+
+            // Parameters for Workbooks.Open:
+            // Filename, UpdateLinks, ReadOnly, Format, Password, WriteResPassword, IgnoreReadOnlyRecommended, Origin, Delimiter, Editable, Notify, Converter, AddToMru, Local, CorruptLoad
+            // We'll set UpdateLinks = 0 (don't update)
+            object missing = Type.Missing;
+            try
+            {
+                wb = excelApp.Workbooks.Open(path, 0, false, Type.Missing, Type.Missing, Type.Missing,
+                                            Type.Missing, Type.Missing, Type.Missing, false, false, Type.Missing, true, Type.Missing, Type.Missing);
+
+                // First try LinkSources to get external workbook links
+                try
+                {
+                    linksObj = wb.LinkSources(Excel.XlLink.xlExcelLinks);
+                }
+                catch (Exception)
+                {
+                    linksObj = null;
+                }
+
+                if (linksObj != null)
+                {
+                    // linksObj is an object[] or single string
+                    var links = ConvertLinkSourcesToList(linksObj);
+                    Log($"Found {links.Count} external links.");
+                    foreach (var link in links)
+                    {
+                        try
+                        {
+                            wb.BreakLink(link, Excel.XlLinkType.xlLinkTypeExcelLinks);
+                            Log($" BreakLink succeeded for: {link}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($" BreakLink failed for: {link}, err: {ex.Message}");
+                        }
+                    }
+                }
+                else
+                {
+                    Log("No LinkSources detected.");
+                }
+
+                // Additionally try to remove external references in defined names (Name refers to external workbook)
+                RemoveExternalDefinedNames(wb);
+
+                // Save and close
+                wb.Save();
+            }
+            finally
+            {
+                if (wb != null)
+                {
+                    try
+                    {
+                        wb.Close(false);
+                    }
+                    catch { }
+                    finally
+                    {
+                        Marshal.FinalReleaseComObject(wb);
+                        wb = null;
+                    }
+                }
+            }
+        }
+
+        private List<string> ConvertLinkSourcesToList(object linksObj)
+        {
+            var result = new List<string>();
+            if (linksObj is object[] arr)
+            {
+                foreach (var o in arr)
+                {
+                    if (o != null) result.Add(o.ToString());
+                }
+            }
+            else if (linksObj != null)
+            {
+                result.Add(linksObj.ToString());
+            }
+            return result;
+        }
+
+        private void RemoveExternalDefinedNames(Excel.Workbook wb)
+        {
+            try
+            {
+                var names = wb.Names;
+                var toDelete = new List<Excel.Name>();
+                foreach (Excel.Name n in names)
+                {
+                    try
+                    {
+                        string refersTo = n.RefersTo ?? string.Empty;
+                        if (refersTo.Contains("[") || refersTo.Contains("]")) // crude check for external workbook ref
+                        {
+                            Log($"Removing name '{n.Name}' which refers to external: {refersTo}");
+                            // delete the name
+                            n.Delete();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"Error checking/deleting name: {ex.Message}");
+                    }
+                    finally
+                    {
+                        // release n explicitly
+                        try { Marshal.FinalReleaseComObject(n); } catch { }
+                    }
+                }
+                // release names collection
+                try { Marshal.FinalReleaseComObject(names); } catch { }
+            }
+            catch (Exception ex)
+            {
+                Log($"Error while removing defined names: {ex.Message}");
+            }
+        }
+    }
+}
+
+
+
+
+
+using System;
+using System.Windows.Forms;
+
+namespace BatchBreakLinks
+{
+    static class Program
+    {
+        [STAThread] // Excel COM 要求 STA
+        static void Main()
+        {
+            Application.SetHighDpiMode(HighDpiMode.SystemAware);
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new MainForm());
+        }
+    }
+}
+
+
+
+
+
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net6.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Office.Interop.Excel" Version="15.0.4797.1000" />
+  </ItemGroup>
+</Project>
