@@ -1,4 +1,360 @@
 
+
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using Excel = Microsoft.Office.Interop.Excel;
+using System.Runtime.InteropServices;
+
+namespace ExcelLinkCleaner
+{
+    public partial class MainForm : Form
+    {
+        private bool _isRunning = false;
+        private int total = 0, success = 0, failed = 0;
+        private string reportDir;
+        private string reportFile;
+
+        public MainForm()
+        {
+            InitializeComponent();
+            CheckForIllegalCrossThreadCalls = false;
+            InitUI();
+        }
+
+        private void InitUI()
+        {
+            BackColor = System.Drawing.Color.FromArgb(245, 245, 245);
+            btnStart.BackColor = System.Drawing.Color.FromArgb(51, 153, 255);
+            btnStop.BackColor = System.Drawing.Color.FromArgb(255, 102, 102);
+            btnBrowse.BackColor = System.Drawing.Color.FromArgb(180, 180, 180);
+            btnOpenReport.BackColor = System.Drawing.Color.FromArgb(180, 180, 200);
+
+            foreach (var btn in new[] { btnStart, btnStop, btnBrowse, btnOpenReport })
+            {
+                btn.FlatStyle = FlatStyle.Flat;
+                btn.FlatAppearance.BorderSize = 0;
+                btn.Font = new System.Drawing.Font("Segoe UI", 10);
+            }
+        }
+
+        private void btnBrowse_Click(object sender, EventArgs e)
+        {
+            using (var fbd = new FolderBrowserDialog())
+            {
+                if (fbd.ShowDialog() == DialogResult.OK)
+                {
+                    txtFolder.Text = fbd.SelectedPath;
+                }
+            }
+        }
+
+        private void btnStart_Click(object sender, EventArgs e)
+        {
+            if (!Directory.Exists(txtFolder.Text))
+            {
+                Log("❌ 请选择有效的文件夹路径");
+                return;
+            }
+
+            ResetStat();
+
+            _isRunning = true;
+            btnStart.Enabled = false;
+            btnStop.Enabled = true;
+
+            reportDir = Path.Combine(Application.StartupPath, "Reports");
+            Directory.CreateDirectory(reportDir);
+            reportFile = Path.Combine(reportDir,
+                DateTime.Now.ToString("yyyyMMdd_HHmmss") + "_report.csv");
+            File.WriteAllText(reportFile, "File,Result,Message,Time\n");
+
+            Task.Run(() => ProcessFolder(txtFolder.Text));
+        }
+
+        private void ResetStat()
+        {
+            total = success = failed = 0;
+            UpdateStat();
+        }
+
+        private void UpdateStat()
+        {
+            lblTotal.Text = $"总计: {total}";
+            lblSuccess.Text = $"成功: {success}";
+            lblFailed.Text = $"失败: {failed}";
+        }
+
+        private void btnStop_Click(object sender, EventArgs e)
+        {
+            _isRunning = false;
+            Log("⚠ 已发送停止指令");
+        }
+
+        private void btnOpenReport_Click(object sender, EventArgs e)
+        {
+            if (Directory.Exists(reportDir))
+                System.Diagnostics.Process.Start(reportDir);
+        }
+
+        private void ProcessFolder(string folder)
+        {
+            var files = Directory.GetFiles(folder, "aaa*.xlsm", SearchOption.AllDirectories);
+            Log($"📂 共发现 {files.Length} 个 .xlsm 文件");
+
+            foreach (var file in files)
+            {
+                if (!_isRunning) break;
+                ProcessSingleFile(file);
+            }
+
+            Log("🟢 任务结束");
+
+            this.Invoke(new Action(() =>
+            {
+                btnStart.Enabled = true;
+                btnStop.Enabled = false;
+            }));
+        }
+
+        private void ProcessSingleFile(string filePath)
+        {
+            total++;
+            UpdateStat();
+
+            Excel.Application app = null;
+            Excel.Workbook wb = null;
+
+            try
+            {
+                Log($"🔍 {filePath}");
+
+                app = new Excel.Application
+                {
+                    DisplayAlerts = false,
+                    Visible = false,
+                    AskToUpdateLinks = false,
+                    AlertBeforeOverwriting = false
+                };
+
+                wb = app.Workbooks.Open(filePath, UpdateLinks: 0);
+
+                var linksObj = wb.LinkSources(Excel.XlLink.xlExcelLinks);
+                var links = ConvertLinkSourcesToList(linksObj);
+
+                if (links.Count > 0)
+                {
+                    foreach (var l in links)
+                        wb.BreakLink(l, Excel.XlLinkType.xlLinkTypeExcelLinks);
+
+                    success++;
+                    AppendReport(filePath, "Success", $"Removed {links.Count} link(s)");
+                    Log($"✔ 成功，删除 {links.Count} 个外部链接");
+                }
+                else
+                {
+                    success++;
+                    AppendReport(filePath, "Success", "No external links");
+                    Log("ℹ 无外部链接");
+                }
+
+                wb.Save();
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                AppendReport(filePath, "Failed", ex.Message);
+                Log($"❌ 失败: {ex.Message}");
+            }
+            finally
+            {
+                UpdateStat();
+
+                if (wb != null) wb.Close(false);
+                if (app != null) app.Quit();
+
+                ReleaseCom(wb);
+                ReleaseCom(app);
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+        }
+
+        private List<string> ConvertLinkSourcesToList(object linksObj)
+        {
+            var result = new List<string>();
+            if (linksObj == null) return result;
+
+            if (linksObj is Array arr)
+            {
+                foreach (var item in arr)
+                    if (item != null)
+                        result.Add(item.ToString());
+            }
+            return result;
+        }
+
+        private void AppendReport(string file, string result, string msg)
+        {
+            File.AppendAllText(reportFile,
+                $"{file},{result},\"{msg}\",{DateTime.Now:HH:mm:ss}\n");
+        }
+
+        private void ReleaseCom(object obj)
+        {
+            if (obj != null)
+            {
+                try { Marshal.ReleaseComObject(obj); }
+                catch { }
+            }
+        }
+
+        private void Log(string msg)
+        {
+            txtLog.Invoke(new Action(() =>
+            {
+                txtLog.AppendText(msg + Environment.NewLine);
+            }));
+        }
+    }
+}
+
+
+
+
+
+
+
+
+namespace ExcelLinkCleaner
+{
+    partial class MainForm
+    {
+        private System.ComponentModel.IContainer components = null;
+
+        private System.Windows.Forms.TextBox txtFolder;
+        private System.Windows.Forms.Button btnBrowse;
+        private System.Windows.Forms.Button btnStart;
+        private System.Windows.Forms.Button btnStop;
+        private System.Windows.Forms.Button btnOpenReport;
+        private System.Windows.Forms.TextBox txtLog;
+        private System.Windows.Forms.Label lblTotal;
+        private System.Windows.Forms.Label lblSuccess;
+        private System.Windows.Forms.Label lblFailed;
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && (components != null))
+            {
+                components.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+
+        private void InitializeComponent()
+        {
+            this.txtFolder = new System.Windows.Forms.TextBox();
+            this.btnBrowse = new System.Windows.Forms.Button();
+            this.btnStart = new System.Windows.Forms.Button();
+            this.btnStop = new System.Windows.Forms.Button();
+            this.btnOpenReport = new System.Windows.Forms.Button();
+            this.txtLog = new System.Windows.Forms.TextBox();
+            this.lblTotal = new System.Windows.Forms.Label();
+            this.lblSuccess = new System.Windows.Forms.Label();
+            this.lblFailed = new System.Windows.Forms.Label();
+
+            this.SuspendLayout();
+
+            // txtFolder
+            this.txtFolder.Font = new System.Drawing.Font("Segoe UI", 10F);
+            this.txtFolder.Location = new System.Drawing.Point(15, 15);
+            this.txtFolder.Size = new System.Drawing.Size(450, 25);
+
+            // btnBrowse
+            this.btnBrowse.Font = new System.Drawing.Font("Segoe UI", 10F);
+            this.btnBrowse.Location = new System.Drawing.Point(475, 15);
+            this.btnBrowse.Size = new System.Drawing.Size(90, 28);
+            this.btnBrowse.Text = "浏览";
+            this.btnBrowse.Click += new System.EventHandler(this.btnBrowse_Click);
+
+            // lblTotal
+            this.lblTotal.AutoSize = true;
+            this.lblTotal.Font = new System.Drawing.Font("Segoe UI", 10F);
+            this.lblTotal.Location = new System.Drawing.Point(15, 55);
+            this.lblTotal.Text = "总计: 0";
+
+            // lblSuccess
+            this.lblSuccess.AutoSize = true;
+            this.lblSuccess.Font = new System.Drawing.Font("Segoe UI", 10F);
+            this.lblSuccess.ForeColor = System.Drawing.Color.Green;
+            this.lblSuccess.Location = new System.Drawing.Point(120, 55);
+            this.lblSuccess.Text = "成功: 0";
+
+            // lblFailed
+            this.lblFailed.AutoSize = true;
+            this.lblFailed.Font = new System.Drawing.Font("Segoe UI", 10F);
+            this.lblFailed.ForeColor = System.Drawing.Color.Red;
+            this.lblFailed.Location = new System.Drawing.Point(225, 55);
+            this.lblFailed.Text = "失败: 0";
+
+            // btnStart
+            this.btnStart.Font = new System.Drawing.Font("Segoe UI", 10F);
+            this.btnStart.Location = new System.Drawing.Point(15, 85);
+            this.btnStart.Size = new System.Drawing.Size(110, 35);
+            this.btnStart.Text = "开始处理";
+            this.btnStart.Click += new System.EventHandler(this.btnStart_Click);
+
+            // btnStop
+            this.btnStop.Font = new System.Drawing.Font("Segoe UI", 10F);
+            this.btnStop.Location = new System.Drawing.Point(135, 85);
+            this.btnStop.Size = new System.Drawing.Size(110, 35);
+            this.btnStop.Text = "停止";
+            this.btnStop.Enabled = false;
+            this.btnStop.Click += new System.EventHandler(this.btnStop_Click);
+
+            // btnOpenReport
+            this.btnOpenReport.Font = new System.Drawing.Font("Segoe UI", 10F);
+            this.btnOpenReport.Location = new System.Drawing.Point(255, 85);
+            this.btnOpenReport.Size = new System.Drawing.Size(150, 35);
+            this.btnOpenReport.Text = "打开报告目录";
+            this.btnOpenReport.Click += new System.EventHandler(this.btnOpenReport_Click);
+
+            // txtLog
+            this.txtLog.Font = new System.Drawing.Font("Consolas", 10F);
+            this.txtLog.Location = new System.Drawing.Point(15, 130);
+            this.txtLog.Size = new System.Drawing.Size(550, 300);
+            this.txtLog.Multiline = true;
+            this.txtLog.ScrollBars = System.Windows.Forms.ScrollBars.Vertical;
+
+            // MainForm
+            this.AutoScaleDimensions = new System.Drawing.SizeF(7F, 15F);
+            this.ClientSize = new System.Drawing.Size(585, 450);
+            this.Controls.Add(this.txtFolder);
+            this.Controls.Add(this.btnBrowse);
+            this.Controls.Add(this.lblTotal);
+            this.Controls.Add(this.lblSuccess);
+            this.Controls.Add(this.lblFailed);
+            this.Controls.Add(this.btnStart);
+            this.Controls.Add(this.btnStop);
+            this.Controls.Add(this.btnOpenReport);
+            this.Controls.Add(this.txtLog);
+
+            this.Font = new System.Drawing.Font("Segoe UI", 10F);
+            this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
+            this.Text = "Excel 外部链接清理工具";
+            this.MaximizeBox = false;
+
+            this.ResumeLayout(false);
+            this.PerformLayout();
+        }
+    }
+}
+
+
+
 using System;
 using System.Collections.Generic;
 using System.IO;
