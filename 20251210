@@ -1,3 +1,224 @@
+
+
+
+using OfficeOpenXml;
+using System;
+using System.Windows.Forms;
+
+namespace ExcelLinkCleaner
+{
+    internal static class Program
+    {
+        [STAThread]
+        static void Main()
+        {
+            ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
+
+            // 捕获 UI 异常
+            Application.ThreadException += (s, e) =>
+                MessageBox.Show(e.Exception.ToString(), "UI Error");
+
+            AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+                MessageBox.Show(e.ExceptionObject.ToString(), "Fatal Error");
+
+            ApplicationConfiguration.Initialize();
+            Application.Run(new MainForm());
+        }
+    }
+}
+
+
+
+namespace ExcelLinkCleaner
+{
+    partial class MainForm
+    {
+        private System.ComponentModel.IContainer components = null;
+        private Button btnSelectFolder;
+        private Button btnStart;
+        private TextBox txtFolder;
+        private TextBox txtLog;
+        private Label label1;
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && (components != null))
+                components.Dispose();
+            base.Dispose(disposing);
+        }
+
+        private void InitializeComponent()
+        {
+            this.btnSelectFolder = new Button();
+            this.btnStart = new Button();
+            this.txtFolder = new TextBox();
+            this.txtLog = new TextBox();
+            this.label1 = new Label();
+            this.SuspendLayout();
+
+            // label1
+            this.label1.Location = new System.Drawing.Point(25, 15);
+            this.label1.Size = new System.Drawing.Size(300, 15);
+            this.label1.Text = "请选择 Excel 文件所在文件夹：";
+
+            // txtFolder
+            this.txtFolder.Location = new System.Drawing.Point(25, 40);
+            this.txtFolder.Size = new System.Drawing.Size(410, 23);
+
+            // btnSelectFolder
+            this.btnSelectFolder.Text = "浏览...";
+            this.btnSelectFolder.Location = new System.Drawing.Point(450, 40);
+            this.btnSelectFolder.Click += new System.EventHandler(this.BtnSelectFolder_Click);
+
+            // btnStart
+            this.btnStart.Text = "开始清理";
+            this.btnStart.Location = new System.Drawing.Point(25, 75);
+            this.btnStart.Click += new System.EventHandler(this.BtnStart_Click);
+
+            // txtLog
+            this.txtLog.Location = new System.Drawing.Point(25, 110);
+            this.txtLog.Size = new System.Drawing.Size(500, 240);
+            this.txtLog.Multiline = true;
+            this.txtLog.ScrollBars = ScrollBars.Vertical;
+            this.txtLog.ReadOnly = true;
+            this.txtLog.WordWrap = false;
+            this.txtLog.BackColor = System.Drawing.SystemColors.Window;
+            this.txtLog.KeyDown += new System.Windows.Forms.KeyEventHandler(this.txtLog_KeyDown);
+
+            // MainForm
+            this.ClientSize = new System.Drawing.Size(550, 380);
+            this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
+            this.MaximizeBox = false;
+            this.MinimizeBox = true;
+            this.SizeGripStyle = System.Windows.Forms.SizeGripStyle.Hide;
+
+            this.Controls.Add(this.btnSelectFolder);
+            this.Controls.Add(this.btnStart);
+            this.Controls.Add(this.txtFolder);
+            this.Controls.Add(this.txtLog);
+            this.Controls.Add(this.label1);
+            this.Text = "Excel 外部链接清理工具";
+            this.ResumeLayout(false);
+            this.PerformLayout();
+        }
+    }
+}
+
+
+
+using OfficeOpenXml;
+using System;
+using System.IO;
+using System.Linq;
+using System.Windows.Forms;
+
+namespace ExcelLinkCleaner
+{
+    public partial class MainForm : Form
+    {
+        public MainForm()
+        {
+            InitializeComponent();
+        }
+
+        private void BtnSelectFolder_Click(object sender, EventArgs e)
+        {
+            using (var dialog = new FolderBrowserDialog())
+            {
+                if (dialog.ShowDialog() == DialogResult.OK)
+                    txtFolder.Text = dialog.SelectedPath;
+            }
+        }
+
+        private void Log(string msg)
+        {
+            txtLog.AppendText(msg + Environment.NewLine);
+            txtLog.SelectionStart = txtLog.Text.Length;
+            txtLog.ScrollToCaret();
+        }
+
+        private void txtLog_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Control && e.KeyCode == Keys.A)
+            {
+                txtLog.SelectAll();
+                e.Handled = true;
+            }
+        }
+
+        private void BtnStart_Click(object sender, EventArgs e)
+        {
+            string folder = txtFolder.Text;
+            if (!Directory.Exists(folder))
+            {
+                MessageBox.Show("请选择有效的文件夹路径！");
+                return;
+            }
+
+            var files = Directory.GetFiles(folder, "*.xlsm", SearchOption.AllDirectories).ToList();
+            Log($"找到 {files.Count} 个 xlsm 文件");
+
+            int success = 0;
+            foreach (var file in files)
+            {
+                try
+                {
+                    Log($"处理 → {file}");
+                    CleanupLinks(file);
+                    success++;
+                }
+                catch (Exception ex)
+                {
+                    Log($"失败: {ex.Message}");
+                }
+            }
+
+            Log($"完成！成功清理 {success} 个文件 🎉");
+        }
+
+        private void CleanupLinks(string filePath)
+        {
+            string backup = filePath + ".bak";
+            if (!File.Exists(backup))
+                File.Copy(filePath, backup);
+
+            using (var pkg = new ExcelPackage(new FileInfo(filePath)))
+            {
+                // 删除外部链接
+                pkg.Workbook.ExternalLinks.Clear();
+
+                // 删除公式中带 [ 外链的单元格
+                foreach (var sheet in pkg.Workbook.Worksheets)
+                {
+                    var dim = sheet.Dimension;
+                    if (dim == null) continue;
+
+                    for (int row = dim.Start.Row; row <= dim.End.Row; row++)
+                    {
+                        for (int col = dim.Start.Column; col <= dim.End.Column; col++)
+                        {
+                            var cell = sheet.Cells[row, col];
+                            if (cell.Formula != null && cell.Formula.Contains("["))
+                            {
+                                cell.Formula = cell.Value?.ToString();
+                            }
+                        }
+                    }
+                }
+
+                pkg.Save();
+            }
+        }
+    }
+}
+
+
+
+
+
+
+
+
 <Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
