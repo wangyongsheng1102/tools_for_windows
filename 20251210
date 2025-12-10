@@ -1,0 +1,197 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="EPPlus" Version="7.2.2" />
+  </ItemGroup>
+</Project>
+
+
+
+
+using System;
+using System.Windows.Forms;
+
+namespace ExcelLinkCleaner
+{
+    internal static class Program
+    {
+        [STAThread]
+        static void Main()
+        {
+            ApplicationConfiguration.Initialize();
+            Application.Run(new MainForm());
+        }
+    }
+}
+
+
+
+namespace ExcelLinkCleaner
+{
+    partial class MainForm
+    {
+        private System.ComponentModel.IContainer components = null;
+        private Button btnSelectFolder;
+        private Button btnStart;
+        private TextBox txtFolder;
+        private ListBox lstLog;
+        private Label label1;
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && (components != null))
+                components.Dispose();
+            base.Dispose(disposing);
+        }
+
+        private void InitializeComponent()
+        {
+            this.btnSelectFolder = new Button();
+            this.btnStart = new Button();
+            this.txtFolder = new TextBox();
+            this.lstLog = new ListBox();
+            this.label1 = new Label();
+            this.SuspendLayout();
+
+            // txtFolder
+            this.txtFolder.Location = new System.Drawing.Point(25, 40);
+            this.txtFolder.Size = new System.Drawing.Size(410, 23);
+
+            // label1
+            this.label1.Location = new System.Drawing.Point(25, 15);
+            this.label1.Size = new System.Drawing.Size(200, 15);
+            this.label1.Text = "请选择 Excel 文件所在文件夹：
+
+            // btnSelectFolder
+            this.btnSelectFolder.Text = "浏览...";
+            this.btnSelectFolder.Location = new System.Drawing.Point(450, 40);
+            this.btnSelectFolder.Click += new EventHandler(this.BtnSelectFolder_Click);
+
+            // btnStart
+            this.btnStart.Text = "开始清理";
+            this.btnStart.Location = new System.Drawing.Point(25, 75);
+            this.btnStart.Click += new EventHandler(this.BtnStart_Click);
+
+            // lstLog
+            this.lstLog.Location = new System.Drawing.Point(25, 110);
+            this.lstLog.Size = new System.Drawing.Size(500, 240);
+
+            // MainForm
+            this.ClientSize = new System.Drawing.Size(550, 380);
+            this.Controls.Add(this.btnSelectFolder);
+            this.Controls.Add(this.btnStart);
+            this.Controls.Add(this.txtFolder);
+            this.Controls.Add(this.lstLog);
+            this.Controls.Add(this.label1);
+            this.Text = "Excel 外部链接清理工具";
+            this.ResumeLayout(false);
+            this.PerformLayout();
+        }
+    }
+}
+
+
+
+using OfficeOpenXml;
+using System;
+using System.IO;
+using System.Linq;
+using System.Windows.Forms;
+
+namespace ExcelLinkCleaner
+{
+    public partial class MainForm : Form
+    {
+        public MainForm()
+        {
+            ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
+            InitializeComponent();
+        }
+
+        private void BtnSelectFolder_Click(object sender, EventArgs e)
+        {
+            using (var dialog = new FolderBrowserDialog())
+            {
+                if (dialog.ShowDialog() == DialogResult.OK)
+                    txtFolder.Text = dialog.SelectedPath;
+            }
+        }
+
+        private void Log(string msg)
+        {
+            lstLog.Items.Add(msg);
+            lstLog.TopIndex = lstLog.Items.Count - 1;
+        }
+
+        private void BtnStart_Click(object sender, EventArgs e)
+        {
+            string folder = txtFolder.Text;
+            if (!Directory.Exists(folder))
+            {
+                MessageBox.Show("请选择有效的文件夹路径！");
+                return;
+            }
+
+            var files = Directory.GetFiles(folder, "*.xlsm", SearchOption.AllDirectories).ToList();
+            Log($"找到 {files.Count} 个 xlsm 文件");
+
+            int success = 0;
+            foreach (var file in files)
+            {
+                try
+                {
+                    Log($"处理 → {file}");
+                    CleanupLinks(file);
+                    success++;
+                }
+                catch (Exception ex)
+                {
+                    Log($"失败: {ex.Message}");
+                }
+            }
+
+            Log($"完成！成功清理 {success} 个文件 🎉");
+        }
+
+        private void CleanupLinks(string filePath)
+        {
+            string backup = filePath + ".bak";
+            if (!File.Exists(backup))
+                File.Copy(filePath, backup);
+
+            using (var pkg = new ExcelPackage(new FileInfo(filePath)))
+            {
+                // 删除外部链接
+                pkg.Workbook.ExternalLinks.Clear();
+
+                // 删除公式中带 [ 外链的单元格
+                foreach (var sheet in pkg.Workbook.Worksheets)
+                {
+                    var dim = sheet.Dimension;
+                    if (dim == null) continue;
+
+                    for (int row = dim.Start.Row; row <= dim.End.Row; row++)
+                    {
+                        for (int col = dim.Start.Column; col <= dim.End.Column; col++)
+                        {
+                            var cell = sheet.Cells[row, col];
+                            if (cell.Formula != null && cell.Formula.Contains("["))
+                            {
+                                cell.Formula = cell.Value?.ToString();
+                            }
+                        }
+                    }
+                }
+
+                pkg.Save();
+            }
+        }
+    }
+}
+
+
+
