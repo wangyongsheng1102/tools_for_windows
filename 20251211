@@ -1,3 +1,368 @@
+
+using System;
+using System.Windows.Forms;
+
+namespace ExcelBatchFormatter
+{
+    internal static class Program
+    {
+        [STAThread]
+        static void Main()
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new Form1());
+        }
+    }
+}
+
+
+
+
+using System;
+using System.IO;
+using System.Windows.Forms;
+using Excel = Microsoft.Office.Interop.Excel;
+
+namespace ExcelBatchFormatter
+{
+    public partial class Form1 : Form
+    {
+        public Form1()
+        {
+            InitializeComponent();
+
+            // 初期フォルダをデスクトップに設定（任意）
+            txtFolder.Text = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+
+            btnBrowse.Click += btnBrowse_Click;
+            btnRun.Click += btnRun_Click;
+        }
+
+        // 「フォルダ選択」ボタン
+        private void btnBrowse_Click(object sender, EventArgs e)
+        {
+            using (var dialog = new FolderBrowserDialog())
+            {
+                dialog.SelectedPath = txtFolder.Text;
+                if (dialog.ShowDialog() == DialogResult.OK)
+                {
+                    txtFolder.Text = dialog.SelectedPath;
+                }
+            }
+        }
+
+        // 「開始」ボタン
+        private void btnRun_Click(object sender, EventArgs e)
+        {
+            string folder = txtFolder.Text.Trim();
+            if (!Directory.Exists(folder))
+            {
+                MessageBox.Show("フォルダが存在しません。");
+                return;
+            }
+
+            // aaa*.xlsm：印刷範囲に基づくフォーマット
+            string[] aaaFiles = Directory.GetFiles(folder, "aaa*.xlsm", SearchOption.TopDirectoryOnly);
+            // bbb*.xlsm：ズーム100%、フィルタ解除のみ
+            string[] bbbFiles = Directory.GetFiles(folder, "bbb*.xlsm", SearchOption.TopDirectoryOnly);
+
+            if (aaaFiles.Length == 0 && bbbFiles.Length == 0)
+            {
+                MessageBox.Show("このフォルダには「aaa」または「bbb」で始まる xlsm ファイルがありません。");
+                return;
+            }
+
+            btnRun.Enabled = false;
+            try
+            {
+                BatchProcess(aaaFiles, bbbFiles);
+                MessageBox.Show("すべての処理が完了しました。");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("処理中にエラーが発生しました。\r\n" + ex.Message);
+            }
+            finally
+            {
+                btnRun.Enabled = true;
+            }
+        }
+
+        /// <summary>
+        /// Excel アプリケーションを 1 つだけ立ち上げて、
+        /// aaa ファイルと bbb ファイルを順に処理する。
+        /// </summary>
+        private void BatchProcess(string[] aaaFiles, string[] bbbFiles)
+        {
+            Excel.Application app = null;
+
+            try
+            {
+                app = new Excel.Application
+                {
+                    Visible = false,
+                    DisplayAlerts = false
+                };
+
+                // 1) aaa*.xlsm を処理
+                foreach (string file in aaaFiles)
+                {
+                    ProcessAaaFile(app, file);
+                }
+
+                // 2) bbb*.xlsm を処理
+                foreach (string file in bbbFiles)
+                {
+                    ProcessBbbFile(app, file);
+                }
+            }
+            finally
+            {
+                if (app != null)
+                {
+                    app.Quit();
+                    System.Runtime.InteropServices.Marshal.ReleaseComObject(app);
+                    app = null;
+                }
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+        }
+
+        /// <summary>
+        /// 「aaa*.xlsm」ファイルを処理する。
+        /// ・印刷範囲が設定されているシートのみ対象
+        ///   - 印刷範囲全体に外枠罫線
+        ///   - 印刷範囲の右側 n 列目に縦線
+        ///   - 印刷範囲の下から 8 行目に横線
+        ///   - 印刷範囲より下の余分な行を削除
+        ///   - 印刷範囲の右 +3 列より外側の列を削除
+        /// ・すべてのシートでズーム 85%、A1 を選択して左上にスクロール
+        /// ・最後に 1 枚目のシートをアクティブにする
+        /// </summary>
+        private void ProcessAaaFile(Excel.Application app, string file)
+        {
+            Excel.Workbook wb = null;
+
+            try
+            {
+                wb = app.Workbooks.Open(file);
+
+                foreach (Excel.Worksheet ws in wb.Worksheets)
+                {
+                    ProcessAaaSheet(ws, app);
+                }
+
+                // 先頭シートをアクティブ
+                ((Excel.Worksheet)wb.Worksheets[1]).Activate();
+
+                wb.Save();
+                wb.Close();
+                System.Runtime.InteropServices.Marshal.ReleaseComObject(wb);
+                wb = null;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"aaa ファイルの処理に失敗しました：{Path.GetFileName(file)}\r\n{ex.Message}");
+                if (wb != null)
+                {
+                    wb.Close(false);
+                    System.Runtime.InteropServices.Marshal.ReleaseComObject(wb);
+                    wb = null;
+                }
+            }
+        }
+
+        /// <summary>
+        /// aaa 用：単一シートの処理
+        /// </summary>
+        private void ProcessAaaSheet(Excel.Worksheet ws, Excel.Application app)
+        {
+            // 印刷範囲を取得（例: "$A$1:$Y$632"）
+            string printArea = ws.PageSetup.PrintArea;
+            if (string.IsNullOrEmpty(printArea))
+            {
+                // 印刷範囲がないシートはスキップ
+                return;
+            }
+
+            // "$A$1:$Y$632" → "A1:Y632"
+            printArea = printArea.Replace("$", "");
+            string[] parts = printArea.Split(':');
+            string startAddr = parts[0];
+            string endAddr = parts[1];
+
+            Excel.Range rng = ws.Range[startAddr, endAddr];
+
+            int usedFirstRow = ws.UsedRange.Row;
+            int usedFirstCol = ws.UsedRange.Column;
+            int usedLastRow  = ws.UsedRange.Row + ws.UsedRange.Rows.Count - 1;
+            int usedLastCol  = ws.UsedRange.Column + ws.UsedRange.Columns.Count - 1;
+
+            int rngFirstRow = rng.Row;
+            int rngLastRow  = rng.Row + rng.Rows.Count - 1;
+            int rngFirstCol = rng.Column;
+            int rngLastCol  = rng.Column + rng.Columns.Count - 1;
+
+            // --- 1. 印刷範囲に罫線を設定（外枠） ---
+            rng.Borders.LineStyle = Excel.XlLineStyle.xlContinuous;
+            rng.Borders.Weight    = Excel.XlBorderWeight.xlThin;
+
+            // --- 1.2 印刷範囲の右側 n 列目に縦線 ---
+            int n = 1; // 必要に応じて変更
+            int rightCol = rngLastCol + n;
+            if (rightCol <= usedLastCol)
+            {
+                Excel.Range rightBorderRange = ws.Range[
+                    ws.Cells[rngFirstRow, rightCol],
+                    ws.Cells[rngLastRow, rightCol]
+                ];
+                rightBorderRange.Borders[Excel.XlBordersIndex.xlEdgeLeft].LineStyle =
+                    Excel.XlLineStyle.xlContinuous;
+                rightBorderRange.Borders[Excel.XlBordersIndex.xlEdgeLeft].Weight =
+                    Excel.XlBorderWeight.xlThin;
+            }
+
+            // --- 1.3 印刷範囲の下から 8 行目に横線 ---
+            int offsetRows   = 8;
+            int underlineRow = rngLastRow + offsetRows;
+            if (underlineRow <= usedLastRow)
+            {
+                Excel.Range underlineRange = ws.Range[
+                    ws.Cells[underlineRow, rngFirstCol],
+                    ws.Cells[underlineRow, rngLastCol]
+                ];
+                underlineRange.Borders[Excel.XlBordersIndex.xlEdgeBottom].LineStyle =
+                    Excel.XlLineStyle.xlContinuous;
+                underlineRange.Borders[Excel.XlBordersIndex.xlEdgeBottom].Weight =
+                    Excel.XlBorderWeight.xlThin;
+            }
+
+            // --- 2. 印刷範囲より下の余分な行を削除 ---
+            int deleteRowStart = rngLastRow + 1;
+            if (usedLastRow > deleteRowStart)
+            {
+                Excel.Range rowsToDelete = ws.Range[
+                    ws.Rows[deleteRowStart],
+                    ws.Rows[usedLastRow]
+                ];
+                rowsToDelete.Delete();
+                usedLastRow = deleteRowStart - 1;
+            }
+
+            // --- 3. 印刷範囲の右 +3 列より外側の列を削除 ---
+            int keepRightCol = rngLastCol + 3;
+            if (keepRightCol < usedLastCol)
+            {
+                int deleteColStart = keepRightCol + 1;
+                Excel.Range colsToDelete = ws.Range[
+                    ws.Columns[deleteColStart],
+                    ws.Columns[usedLastCol]
+                ];
+                colsToDelete.Delete();
+                usedLastCol = keepRightCol;
+            }
+
+            // --- 4. ズーム 85%、A1 を選択しつつ左上にスクロール ---
+            ws.Activate();
+            Excel.Window win = app.ActiveWindow;
+            win.Zoom        = 85;
+            win.ScrollRow   = 1;
+            win.ScrollColumn= 1;
+            ws.Range["A1"].Select();
+        }
+
+        /// <summary>
+        /// 「bbb*.xlsm」ファイルを処理する。
+        /// ・すべてのシート：
+        ///   - オートフィルタを解除
+        ///   - ズーム 100%
+        ///   - A1 を選択し、画面を左上にスクロール
+        /// ・最後に 1 枚目のシートをアクティブにする
+        /// </summary>
+        private void ProcessBbbFile(Excel.Application app, string file)
+        {
+            Excel.Workbook wb = null;
+
+            try
+            {
+                wb = app.Workbooks.Open(file);
+
+                foreach (Excel.Worksheet ws in wb.Worksheets)
+                {
+                    ProcessBbbSheet(ws, app);
+                }
+
+                // 先頭シートをアクティブ
+                ((Excel.Worksheet)wb.Worksheets[1]).Activate();
+
+                wb.Save();
+                wb.Close();
+                System.Runtime.InteropServices.Marshal.ReleaseComObject(wb);
+                wb = null;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"bbb ファイルの処理に失敗しました：{Path.GetFileName(file)}\r\n{ex.Message}");
+                if (wb != null)
+                {
+                    wb.Close(false);
+                    System.Runtime.InteropServices.Marshal.ReleaseComObject(wb);
+                    wb = null;
+                }
+            }
+        }
+
+        /// <summary>
+        /// bbb 用：単一シートの処理
+        /// </summary>
+        private void ProcessBbbSheet(Excel.Worksheet ws, Excel.Application app)
+        {
+            // 1. シート上のオートフィルタを解除
+            if (ws.AutoFilter != null)
+            {
+                ws.AutoFilterMode = false;
+            }
+
+            // テーブル（ListObject）のフィルタも解除（必要に応じて）
+            foreach (Excel.ListObject table in ws.ListObjects)
+            {
+                try
+                {
+                    if (table.AutoFilter != null)
+                    {
+                        table.AutoFilter.ShowAllData();
+                    }
+                }
+                catch
+                {
+                    // フィルタが無効な場合などは無視
+                }
+            }
+
+            // 2. ズーム 100%、左上へスクロール
+            ws.Activate();
+            Excel.Window win = app.ActiveWindow;
+            win.Zoom         = 100;
+            win.ScrollRow    = 1;
+            win.ScrollColumn = 1;
+
+            // 3. A1 を選択
+            ws.Range["A1"].Select();
+        }
+    }
+}
+
+
+
+
+
+
+
+
+
+
 def process_sheet(ws):
     # -----------------------
     # 1) 解析打印区域
