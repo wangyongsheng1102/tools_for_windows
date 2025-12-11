@@ -1,0 +1,74 @@
+def process_sheet(ws):
+    # -----------------------
+    # 1) 解析打印区域
+    # -----------------------
+    print_area = ws.api.PageSetup.PrintArea
+    if not print_area:
+        raise RuntimeError("该 sheet 未设置打印区域")
+
+    area = print_area.replace("$", "")
+    rng = ws.range(area)
+
+    rng_first_row = rng.row
+    rng_last_row = rng.last_cell.row
+    rng_first_col = rng.column
+    rng_last_col = rng.last_cell.column
+
+    used = ws.used_range
+    used_last_row = used.last_cell.row
+    used_last_col = used.last_cell.column
+
+    # -----------------------
+    # 2) 删除打印区域下方多余行
+    # -----------------------
+    if used_last_row > rng_last_row:
+        ws.range(f"{rng_last_row+1}:{used_last_row}").api.Delete()
+
+    # -----------------------
+    # 3) 删除右侧多余列（保留打印区域 + 3 列）
+    # -----------------------
+    keep_last_col = rng_last_col + 3   # 允许的最大列
+    if used_last_col > keep_last_col:
+        delete_start = keep_last_col + 1
+        delete_end = used_last_col
+        rng_del = ws.range(
+            ws.cells(1, delete_start),
+            ws.cells(used_last_row, delete_end)
+        )
+        rng_del.api.Delete()
+
+    # -----------------------
+    # 4) 加下划线 —— 按第 8 行整行加底边线
+    # -----------------------
+    underline_row = 8
+    if underline_row <= rng_last_row:
+        row_rng = ws.range((underline_row, rng_first_col),
+                           (underline_row, rng_last_col))
+        row_rng.api.Borders(9).LineStyle = 1    # xlEdgeBottom
+        row_rng.api.Borders(9).Weight = 2       # xlThin
+
+    # -----------------------
+    # 5) n 列（指定列）右侧加线，从第 6 行到打印区域最下行
+    # -----------------------
+    n_col = 14   # 举例：N = 第 14 列，你可自己改
+    for row in range(6, rng_last_row + 1):
+        cell = ws.range((row, n_col))
+        b = cell.api.Borders(10)  # xlEdgeRight
+        b.LineStyle = 1
+        b.Weight = 2
+
+    # -----------------------
+    # 6) 打印区域最右侧加线
+    # -----------------------
+    right_col_rng = ws.range((rng_first_row, rng_last_col),
+                             (rng_last_row, rng_last_col))
+    right_col_rng.api.Borders(10).LineStyle = 1
+    right_col_rng.api.Borders(10).Weight = 2
+
+    # -----------------------
+    # 7) 打印区域最下侧加线
+    # -----------------------
+    bottom_rng = ws.range((rng_last_row, rng_first_col),
+                          (rng_last_row, rng_last_col))
+    bottom_rng.api.Borders(9).LineStyle = 1
+    bottom_rng.api.Borders(9).Weight = 2
