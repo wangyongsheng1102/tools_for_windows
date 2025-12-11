@@ -1,4 +1,734 @@
 
+
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net7.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Office Interop -->
+    <PackageReference Include="Microsoft.Office.Interop.Excel" Version="15.0.4797.1000" />
+  </ItemGroup>
+</Project>
+
+
+
+<Application x:Class="ExcelBatchProcessor.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <!-- 简单样式，按需自定义 -->
+        <Style TargetType="Button">
+            <Setter Property="Margin" Value="6"/>
+            <Setter Property="Padding" Value="8,6"/>
+        </Style>
+    </Application.Resources>
+</Application>
+
+
+
+
+using System.Windows;
+
+namespace ExcelBatchProcessor
+{
+    public partial class App : Application
+    {
+    }
+}
+
+
+<Window x:Class="ExcelBatchProcessor.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Excel Batch Processor" Height="520" Width="820" WindowStartupLocation="CenterScreen">
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Orientation="Horizontal" Grid.Row="0" VerticalAlignment="Center">
+            <TextBlock Text="ルートフォルダ：" VerticalAlignment="Center" Margin="0,0,6,0"/>
+            <TextBox x:Name="TxtRootFolder" Width="540"/>
+            <Button x:Name="BtnBrowse" Content="参照" Click="BtnBrowse_Click"/>
+        </StackPanel>
+
+        <StackPanel Orientation="Horizontal" Grid.Row="1" Margin="0,8,0,8">
+            <TextBlock Text="N 列 (列番号):" VerticalAlignment="Center" Margin="0,0,6,0"/>
+            <TextBox x:Name="TxtNCol" Width="80" Text="14"/>
+            <TextBlock Text="（例：N=14）" VerticalAlignment="Center" Margin="8,0,0,0"/>
+            <CheckBox x:Name="ChkPreview" Content="プレビュー（保存しない）" Margin="16,0,0,0"/>
+            <Button x:Name="BtnStart" Content="開始" Click="BtnStart_Click" Margin="12,0,0,0"/>
+            <Button x:Name="BtnCancel" Content="キャンセル" Click="BtnCancel_Click" Margin="6,0,0,0"/>
+        </StackPanel>
+
+        <GroupBox Header="処理ログ" Grid.Row="2">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <ListBox x:Name="LstLog" Grid.Row="0" FontFamily="Consolas" />
+                <StackPanel Orientation="Horizontal" Grid.Row="1" Margin="6">
+                    <TextBlock Text="状態：" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <TextBlock x:Name="TxtStatus" Text="待機中" VerticalAlignment="Center" />
+                </StackPanel>
+            </Grid>
+        </GroupBox>
+
+        <TextBlock Grid.Row="3" Text="注意：Excel が起動します。処理中はファイルを閉じないでください。" Foreground="Gray" Margin="6"/>
+    </Grid>
+</Window>
+
+
+
+using Microsoft.Win32;
+using System;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Forms;
+
+namespace ExcelBatchProcessor
+{
+    public partial class MainWindow : Window
+    {
+        private CancellationTokenSource? _cts;
+
+        public MainWindow()
+        {
+            InitializeComponent();
+        }
+
+        private void BtnBrowse_Click(object sender, RoutedEventArgs e)
+        {
+            using var dlg = new FolderBrowserDialog();
+            dlg.Description = "処理するルートフォルダを選択してください";
+            dlg.ShowNewFolderButton = false;
+
+            if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+            {
+                TxtRootFolder.Text = dlg.SelectedPath;
+            }
+        }
+
+        private async void BtnStart_Click(object sender, RoutedEventArgs e)
+        {
+            var root = TxtRootFolder.Text.Trim();
+            if (string.IsNullOrEmpty(root) || !Directory.Exists(root))
+            {
+                LogError("有効なフォルダを選択してください。");
+                return;
+            }
+
+            if (!int.TryParse(TxtNCol.Text.Trim(), out int nCol) || nCol <= 0)
+            {
+                LogError("有効な N 列番号を入力してください。");
+                return;
+            }
+
+            BtnStart.IsEnabled = false;
+            BtnCancel.IsEnabled = true;
+            _cts = new CancellationTokenSource();
+
+            TxtStatus.Text = "処理開始...";
+            LstLog.Items.Add($"[{DateTime.Now}] 処理開始: {root}");
+
+            try
+            {
+                var processor = new ExcelProcessor(Log, LogError);
+                bool preview = ChkPreview.IsChecked == true;
+
+                await Task.Run(() => processor.ProcessFolder(root, nCol, preview, _cts.Token), _cts.Token);
+
+                LstLog.Items.Add($"[{DateTime.Now}] 全処理完了");
+                TxtStatus.Text = "完了";
+            }
+            catch (OperationCanceledException)
+            {
+                LogError("処理はユーザーによってキャンセルされました。");
+                TxtStatus.Text = "キャンセル";
+            }
+            catch (Exception ex)
+            {
+                LogError("致命的なエラーが発生しました: " + ex.Message);
+                TxtStatus.Text = "エラー";
+            }
+            finally
+            {
+                BtnStart.IsEnabled = true;
+                BtnCancel.IsEnabled = false;
+                _cts = null;
+            }
+        }
+
+        private void BtnCancel_Click(object sender, RoutedEventArgs e)
+        {
+            if (_cts != null && !_cts.IsCancellationRequested)
+            {
+                _cts.Cancel();
+                TxtStatus.Text = "キャンセル中...";
+                LstLog.Items.Add($"[{DateTime.Now}] キャンセル要求を送信しました。");
+            }
+        }
+
+        private void Log(string message)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                LstLog.Items.Add($"[{DateTime.Now}] {message}");
+                LstLog.ScrollIntoView(LstLog.Items[LstLog.Items.Count - 1]);
+            });
+        }
+
+        private void LogError(string message)
+        {
+            // 日文错误显示
+            Log("エラー: " + message);
+        }
+    }
+}
+
+
+
+using Microsoft.Office.Interop.Excel;
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading;
+
+namespace ExcelBatchProcessor
+{
+    public class ExcelProcessor
+    {
+        private readonly Action<string> _log;
+        private readonly Action<string> _logError;
+
+        public ExcelProcessor(Action<string> log, Action<string> logError)
+        {
+            _log = log;
+            _logError = logError;
+        }
+
+        public void ProcessFolder(string rootFolder, int nCol, bool previewOnly, CancellationToken token)
+        {
+            foreach (var file in Directory.EnumerateFiles(rootFolder, "*.xlsm", SearchOption.AllDirectories))
+            {
+                token.ThrowIfCancellationRequested();
+
+                var name = Path.GetFileName(file);
+                if (name.StartsWith("aaa", StringComparison.OrdinalIgnoreCase))
+                {
+                    _log($"aaa ファイルを処理: {file}");
+                    try
+                    {
+                        ProcessAaaFile(file, nCol, previewOnly, token);
+                        _log($"処理完了: {file}");
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        _logError($"ファイル処理エラー（aaa）: {file} -> {ex.Message}");
+                    }
+                }
+                else if (name.StartsWith("bbb", StringComparison.OrdinalIgnoreCase))
+                {
+                    _log($"bbb ファイルを処理: {file}");
+                    try
+                    {
+                        ProcessBbbFile(file, previewOnly, token);
+                        _log($"処理完了: {file}");
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        _logError($"ファイル処理エラー（bbb）: {file} -> {ex.Message}");
+                    }
+                }
+            }
+        }
+
+        private Application CreateExcelApp()
+        {
+            // 新規 Excel Application を作成し必要なプロパティをオフにする
+            var app = new Application
+            {
+                Visible = false,
+                DisplayAlerts = false
+            };
+
+            try
+            {
+                // COM 层面向设置（若可用）
+                app.AskToUpdateLinks = false;
+            }
+            catch { /* 某些 Office 版本可能不暴露此属性直接设置 */ }
+
+            return app;
+        }
+
+        private void ProcessAaaFile(string path, int nCol, bool previewOnly, CancellationToken token)
+        {
+            Application? app = null;
+            Workbook? wb = null;
+
+            try
+            {
+                token.ThrowIfCancellationRequested();
+                app = CreateExcelApp();
+
+                // 打开文件，不更新链接
+                wb = app.Workbooks.Open(path, UpdateLinks: false, ReadOnly: false, IgnoreReadOnlyRecommended: true);
+
+                // 遍历 sheet
+                Sheets sheets = wb.Worksheets;
+                int sheetCount = sheets.Count;
+
+                for (int i = 1; i <= sheetCount; ++i)
+                {
+                    token.ThrowIfCancellationRequested();
+
+                    Worksheet ws = (Worksheet)sheets[i];
+                    string sheetName = ws.Name;
+                    _log($"  シート処理: {sheetName}");
+
+                    try
+                    {
+                        // 仅当 PrintArea 存在时处理
+                        string printArea = "";
+                        try
+                        {
+                            printArea = ws.PageSetup?.PrintArea ?? "";
+                        }
+                        catch { printArea = ""; }
+
+                        if (string.IsNullOrWhiteSpace(printArea))
+                        {
+                            _log($"    PrintArea 未設定、スキップ: {sheetName}");
+                            ReleaseCom(ws);
+                            continue;
+                        }
+
+                        // 保存原始 PrintArea
+                        string originalPrintArea = printArea;
+
+                        // 解析面积去掉 $
+                        var area = originalPrintArea.Replace("$", "").Trim();
+                        Range printRange = null;
+                        try
+                        {
+                            printRange = ws.get_Range(area);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logError($"    PrintArea を解析できません: {ex.Message}");
+                            ReleaseCom(ws);
+                            continue;
+                        }
+
+                        Range usedRange = ws.UsedRange;
+                        int usedFirstRow = usedRange.Row;
+                        int usedLastRow = usedRange.Rows.Count + usedRange.Row - 1;
+                        int usedFirstCol = usedRange.Column;
+                        int usedLastCol = usedRange.Columns.Count + usedRange.Column - 1;
+
+                        int rngFirstRow = printRange.Row;
+                        int rngLastRow = printRange.Rows.Count + printRange.Row - 1;
+                        int rngFirstCol = printRange.Column;
+                        int rngLastCol = printRange.Columns.Count + printRange.Column - 1;
+
+                        // 删除打印区域下方多余行
+                        if (usedLastRow > rngLastRow)
+                        {
+                            var delRange = ws.get_Range($"{rngLastRow + 1}:{usedLastRow}");
+                            delRange.Delete(XlDeleteShiftDirection.xlShiftUp);
+                            ReleaseCom(delRange);
+                            _log($"    下方の余分な行を削除: {rngLastRow + 1} 〜 {usedLastRow}");
+                        }
+
+                        // 删除右侧多余列（保留 PrintArea 最右 + 3 列）
+                        int keepLastCol = rngLastCol + 3;
+                        if (usedLastCol > keepLastCol)
+                        {
+                            Range startCell = ws.Cells[1, keepLastCol + 1] as Range;
+                            Range endCell = ws.Cells[usedLastRow, usedLastCol] as Range;
+                            Range delCols = ws.Range[startCell, endCell];
+                            delCols.Delete(XlDeleteShiftDirection.xlShiftToLeft);
+                            ReleaseCom(startCell);
+                            ReleaseCom(endCell);
+                            ReleaseCom(delCols);
+                            _log($"    右側の余分な列を削除: {keepLastCol + 1} 〜 {usedLastCol}");
+                        }
+
+                        // 重新获取 printRange 的边界（删除列/行可能影响）
+                        ReleaseCom(printRange);
+                        printRange = ws.get_Range(area);
+                        rngFirstRow = printRange.Row;
+                        rngLastRow = printRange.Rows.Count + printRange.Row - 1;
+                        rngFirstCol = printRange.Column;
+                        rngLastCol = printRange.Columns.Count + printRange.Column - 1;
+
+                        // 清除打印区域外的边框（以四块区域操作）
+                        // 上
+                        if (usedFirstRow < rngFirstRow)
+                        {
+                            Range r = ws.Range[ws.Cells[usedFirstRow, usedFirstCol], ws.Cells[rngFirstRow - 1, usedLastCol]];
+                            r.Borders.LineStyle = XlLineStyle.xlLineStyleNone;
+                            ReleaseCom(r);
+                        }
+
+                        // 下
+                        if (rngLastRow < usedLastRow)
+                        {
+                            Range r = ws.Range[ws.Cells[rngLastRow + 1, usedFirstCol], ws.Cells[usedLastRow, usedLastCol]];
+                            r.Borders.LineStyle = XlLineStyle.xlLineStyleNone;
+                            ReleaseCom(r);
+                        }
+
+                        // 左
+                        if (usedFirstCol < rngFirstCol)
+                        {
+                            Range r = ws.Range[ws.Cells[rngFirstRow, usedFirstCol], ws.Cells[rngLastRow, rngFirstCol - 1]];
+                            r.Borders.LineStyle = XlLineStyle.xlLineStyleNone;
+                            ReleaseCom(r);
+                        }
+
+                        // 右
+                        if (rngLastCol < usedLastCol)
+                        {
+                            Range r = ws.Range[ws.Cells[rngFirstRow, rngLastCol + 1], ws.Cells[rngLastRow, usedLastCol]];
+                            r.Borders.LineStyle = XlLineStyle.xlLineStyleNone;
+                            ReleaseCom(r);
+                        }
+
+                        // 第 8 行在打印区域范围内加下划线（底边）
+                        int underlineRow = 8;
+                        if (underlineRow >= rngFirstRow && underlineRow <= rngLastRow)
+                        {
+                            Range rowR = ws.Range[ws.Cells[underlineRow, rngFirstCol], ws.Cells[underlineRow, rngLastCol]];
+                            var bottom = rowR.Borders[XlBordersIndex.xlEdgeBottom];
+                            bottom.LineStyle = XlLineStyle.xlContinuous;
+                            bottom.Weight = XlBorderWeight.xlThin;
+                            ReleaseCom(bottom);
+                            ReleaseCom(rowR);
+                            _log($"    第 {underlineRow} 行に下線を設定");
+                        }
+
+                        // n 列从第 6 行到 print area 最下行加右侧线
+                        int startRow = Math.Max(6, rngFirstRow);
+                        for (int r = startRow; r <= rngLastRow; r++)
+                        {
+                            if (nCol <= rngLastCol)
+                            {
+                                Range cell = ws.Cells[r, nCol] as Range;
+                                var rightB = cell.Borders[XlBordersIndex.xlEdgeRight];
+                                rightB.LineStyle = XlLineStyle.xlContinuous;
+                                rightB.Weight = XlBorderWeight.xlThin;
+                                ReleaseCom(rightB);
+                                ReleaseCom(cell);
+                            }
+                        }
+                        _log($"    N 列（{nCol}）の右側に線を追加");
+
+                        // 打印区域最右侧加线
+                        Range rightColRange = ws.Range[ws.Cells[rngFirstRow, rngLastCol], ws.Cells[rngLastRow, rngLastCol]];
+                        {
+                            var br = rightColRange.Borders[XlBordersIndex.xlEdgeRight];
+                            br.LineStyle = XlLineStyle.xlContinuous;
+                            br.Weight = XlBorderWeight.xlThin;
+                            ReleaseCom(br);
+                        }
+                        ReleaseCom(rightColRange);
+
+                        // 打印区域最下侧加线
+                        Range bottomRange = ws.Range[ws.Cells[rngLastRow, rngFirstCol], ws.Cells[rngLastRow, rngLastCol]];
+                        {
+                            var bb = bottomRange.Borders[XlBordersIndex.xlEdgeBottom];
+                            bb.LineStyle = XlLineStyle.xlContinuous;
+                            bb.Weight = XlBorderWeight.xlThin;
+                            ReleaseCom(bb);
+                        }
+                        ReleaseCom(bottomRange);
+
+                        // 处理分页、缩放：为保证 Zoom 生效，先暂时清空 PrintArea，再设置 Zoom，再恢复 PrintArea
+                        try
+                        {
+                            ws.PageSetup.PrintArea = "";
+                        }
+                        catch { /* 无法设置时跳过 */ }
+
+                        try
+                        {
+                            ws.PageSetup.FitToPagesWide = false;
+                            ws.PageSetup.FitToPagesTall = false;
+                        }
+                        catch { }
+
+                        try
+                        {
+                            ws.ResetAllPageBreaks();
+                        }
+                        catch { }
+
+                        try
+                        {
+                            ws.DisplayPageBreaks = false;
+                        }
+                        catch { }
+
+                        // 设置缩放 85%
+                        try
+                        {
+                            ws.PageSetup.Zoom = 85;
+                        }
+                        catch { }
+
+                        // 恢复 PrintArea
+                        try
+                        {
+                            ws.PageSetup.PrintArea = originalPrintArea;
+                        }
+                        catch { }
+
+                        // 移动光标到 A1
+                        try
+                        {
+                            ws.Activate();
+                            var a1 = ws.get_Range("A1");
+                            a1.Select();
+                            ReleaseCom(a1);
+                        }
+                        catch { }
+
+                        ReleaseCom(printRange);
+                        ReleaseCom(usedRange);
+                        ReleaseCom(ws);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        _logError($"    シート処理エラー: {ex.Message}");
+                    }
+                }
+
+                // 激活第一个 sheet
+                try
+                {
+                    if (sheets.Count >= 1)
+                    {
+                        ((Worksheet)sheets[1]).Activate();
+                    }
+                }
+                catch { }
+
+                // 保存（预览模式下不保存）
+                if (!previewOnly)
+                {
+                    wb.Save();
+                    _log("  保存しました。");
+                }
+                else
+                {
+                    _log("  プレビュー: 保存は行いません。");
+                }
+            }
+            finally
+            {
+                // 释放并关闭
+                if (wb != null)
+                {
+                    try { wb.Close(SaveChanges: false); } catch { }
+                    ReleaseCom(wb);
+                }
+                if (app != null)
+                {
+                    try { app.Quit(); } catch { }
+                    ReleaseCom(app);
+                }
+
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+        }
+
+        private void ProcessBbbFile(string path, bool previewOnly, CancellationToken token)
+        {
+            Application? app = null;
+            Workbook? wb = null;
+            try
+            {
+                token.ThrowIfCancellationRequested();
+                app = CreateExcelApp();
+                wb = app.Workbooks.Open(path, UpdateLinks: false, ReadOnly: false, IgnoreReadOnlyRecommended: true);
+
+                Sheets sheets = wb.Worksheets;
+                int sheetCount = sheets.Count;
+
+                for (int i = 1; i <= sheetCount; ++i)
+                {
+                    token.ThrowIfCancellationRequested();
+                    Worksheet ws = (Worksheet)sheets[i];
+                    _log($"  シート処理: {ws.Name}");
+
+                    try
+                    {
+                        // 清除筛选
+                        try
+                        {
+                            if (ws.AutoFilterMode)
+                                ws.AutoFilterMode = false;
+                        }
+                        catch { }
+
+                        // ListObjects（表格）中的筛选
+                        try
+                        {
+                            var listObjects = ws.ListObjects;
+                            int loCount = listObjects.Count;
+                            for (int j = 1; j <= loCount; j++)
+                            {
+                                var lo = listObjects[j];
+                                try
+                                {
+                                    lo.ShowAutoFilter = false;
+                                    Marshal.ReleaseComObject(lo);
+                                }
+                                catch { }
+                            }
+                        }
+                        catch { }
+
+                        // 隐藏分页虚线
+                        try { ws.DisplayPageBreaks = false; } catch { }
+
+                        // 先清空 PrintArea 再设置 Zoom 以避免干扰
+                        string originalPrintArea = "";
+                        try { originalPrintArea = ws.PageSetup.PrintArea; } catch { originalPrintArea = ""; }
+                        try { ws.PageSetup.PrintArea = ""; } catch { }
+                        try { ws.PageSetup.FitToPagesWide = false; ws.PageSetup.FitToPagesTall = false; } catch { }
+                        try { ws.ResetAllPageBreaks(); } catch { }
+                        try { ws.PageSetup.Zoom = 100; } catch { }
+                        try { if (!string.IsNullOrWhiteSpace(originalPrintArea)) ws.PageSetup.PrintArea = originalPrintArea; } catch { }
+
+                        // 光标到 A1
+                        try { ws.Activate(); var a1 = ws.get_Range("A1"); a1.Select(); ReleaseCom(a1); } catch { }
+
+                        ReleaseCom(ws);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        _logError($"    シート処理エラー(bbb): {ex.Message}");
+                    }
+                }
+
+                // 激活第一个 sheet
+                try
+                {
+                    if (sheets.Count >= 1)
+                    {
+                        ((Worksheet)sheets[1]).Activate();
+                    }
+                }
+                catch { }
+
+                if (!previewOnly)
+                {
+                    wb.Save();
+                    _log("  保存しました。");
+                }
+                else
+                {
+                    _log("  プレビュー: 保存は行いません。");
+                }
+            }
+            finally
+            {
+                if (wb != null)
+                {
+                    try { wb.Close(SaveChanges: false); } catch { }
+                    ReleaseCom(wb);
+                }
+                if (app != null)
+                {
+                    try { app.Quit(); } catch { }
+                    ReleaseCom(app);
+                }
+
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+        }
+
+        private void ReleaseCom(object? o)
+        {
+            if (o == null) return;
+            try
+            {
+                Marshal.ReleaseComObject(o);
+            }
+            catch { }
+        }
+    }
+}
+
+
+# ExcelBatchProcessor
+
+## 概要
+WPF アプリケーション。Excel COM (Microsoft.Office.Interop.Excel) を用いて指定フォルダ内の `aaa*.xlsm` / `bbb*.xlsm` をバッチ処理します。
+
+## 機能
+- aaa ファイル:
+  - PrintArea が設定されているシートのみ処理
+  - PrintArea 下方の余分な行削除、PrintArea 右側 +3 列以外削除
+  - PrintArea の下・右に枠線追加
+  - 第8行に下線追加（PrintArea 範囲内）
+  - 指定 N 列（例:14） の右側に第6行→PrintArea下まで線を追加
+  - Zoom = 85%
+  - 各シートの選択セルを A1 にし、最終的に第1シートをアクティブにする
+- bbb ファイル:
+  - Zoom = 100%
+  - 各シートの選択セルを A1 にし、最終的に第1シートをアクティブにする
+  - すべてのシートでフィルタを解除する
+- UI でログ表示、プレビュー（保存せず動作確認）モードあり
+- エラーメッセージは日本語で出力
+
+## 注意
+- 実行環境は Windows、Excel がインストールされている必要があります。
+- 実行中は対象ファイルを操作しないでください。
+- 事前にファイルのバックアップを推奨します。
+
+## ビルド
+1. Visual Studio でこのフォルダを開く、または `dotnet build`。
+2. 実行。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 using System;
 using System.Windows.Forms;
 
