@@ -1,3 +1,269 @@
+可以做，而且完全可以做到和 GitHub 上的 WPF UI Gallery 一样的 Fluent 体验，只是把它从“示例应用”抽象成你自己的通用框架。下面给你一套从 0 到“可复用壳工程”的思路和关键代码骨架，你可以在此基础上继续加业务模块。
+
+## 总体思路
+
+- UI 基础库：使用 `lepoco/wpfui` 提供的 FluentWindow、NavigationView、TitleBar、Card、Button 等控件作为整体 UI 基石。[1][2]
+- 目标效果：整体导航、主题切换、示例页布局都参考官方的 `Wpf.Ui.Gallery` 项目，只是把里面的示例页替换成你自己的业务页。[3][4]
+- 产出形态：一个“壳”式框架项目：  
+  - 已内置 FluetWindow 外观、导航、主题、消息提示。  
+  - 提供统一的“页面注册机制”，新功能只要加 Page + ViewModel + 注册即可出现在导航。  
+
+下面按步骤写，你可以逐步搭起来。
+
+## 第一步：工程 & App.xaml 基础
+
+1. 新建 WPF (.NET 6/8/9) 项目，例如 `MyFluentFramework`.  
+2. 装 NuGet 包：`Wpf.Ui`。[2]
+3. 在 `App.xaml` 里引入 WPF UI 的资源字典：
+
+```xml
+<Application x:Class="MyFluentFramework.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <!-- 主题：Light/Dark/System 可换 -->
+                <ui:ThemesDictionary Theme="System" />
+                <!-- 控件样式 -->
+                <ui:ControlsDictionary />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>
+```
+
+这一步让你后面用 `FluentWindow`、`NavigationView` 等控件时自动带 Fluent 风格。[2]
+
+## 第二步：主窗口 = FluentWindow + NavigationView
+
+仿 Gallery 的主壳：左侧导航 + 顶部标题栏 + 中间框架区域。[4][3]
+
+`MainWindow.xaml`：
+
+```xml
+<ui:FluentWindow x:Class="MyFluentFramework.MainWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 xmlns:pages="clr-namespace:MyFluentFramework.Views.Pages"
+                 Title="My Fluent UI Framework"
+                 Width="1200" Height="800"
+                 WindowStartupLocation="CenterScreen">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition/>
+        </Grid.RowDefinitions>
+
+        <!-- 顶部 TitleBar -->
+        <ui:TitleBar x:Name="TitleBar" Grid.Row="0"
+                     Title="My Fluent UI Framework" />
+
+        <!-- 主区域：导航 + Frame -->
+        <ui:NavigationView x:Name="NavView"
+                           Grid.Row="1"
+                           IsBackButtonVisible="Collapsed"
+                           IsPaneToggleButtonVisible="True"
+                           IsSettingsVisible="True"
+                           Navigated="NavView_OnNavigated">
+            <ui:NavigationView.MenuItems>
+                <ui:NavigationViewItem
+                    Content="Dashboard"
+                    Icon="Home24"
+                    TargetPageType="{x:Type pages:DashboardPage}" />
+                <ui:NavigationViewItem
+                    Content="Samples"
+                    Icon="DataHistogram24"
+                    TargetPageType="{x:Type pages:SamplesPage}" />
+            </ui:NavigationView.MenuItems>
+
+            <ui:NavigationView.FooterMenuItems>
+                <ui:NavigationViewItem
+                    Content="About"
+                    Icon="Info24"
+                    TargetPageType="{x:Type pages:AboutPage}" />
+            </ui:NavigationView.FooterMenuItems>
+        </ui:NavigationView>
+    </Grid>
+</ui:FluentWindow>
+```
+
+WPF UI 的 `NavigationView` 自带 “TargetPageType + Frame 导航” 支持，用起来和 Gallery 一致。[4]
+
+`MainWindow.xaml.cs`（简化写法）：
+
+```csharp
+using System;
+using System.Windows;
+using Wpf.Ui.Controls;
+
+namespace MyFluentFramework;
+
+public partial class MainWindow : FluentWindow
+{
+    private readonly INavigationService _navigationService;
+
+    public MainWindow()
+    {
+        InitializeComponent();
+
+        // 创建导航服务
+        _navigationService = new NavigationService();
+        _navigationService.SetNavigationControl(NavView);
+
+        // 初始导航到 Dashboard
+        Loaded += (_, _) =>
+        {
+            _navigationService.Navigate(typeof(Views.Pages.DashboardPage));
+        };
+    }
+
+    private void NavView_OnNavigated(NavigationView sender, NavigatedEventArgs e)
+    {
+        // 这里可以做页面切换后的逻辑，比如更新标题等
+        TitleBar.Title = (e.Page as INavigablePage)?.Title ?? "My Fluent UI Framework";
+    }
+}
+
+// 可选：定义一个页面接口，统一标题等
+public interface INavigablePage
+{
+    string Title { get; }
+}
+```
+
+核心点就是 `_navigationService.SetNavigationControl(NavView)` 这一句，把 WPF UI 的导航服务接上。[4]
+
+## 第三步：基础页面骨架（Dashboard / Samples / About）
+
+以 Dashboard 为例，仿 Gallery 的卡片式布局：上面一行标题/描述，下面用 Card 展示入口按钮。[2]
+
+`Views/Pages/DashboardPage.xaml`：
+
+```xml
+<Page x:Class="MyFluentFramework.Views.Pages.DashboardPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      xmlns:local="clr-namespace:MyFluentFramework.Views.Pages"
+      Background="{DynamicResource ApplicationBackgroundBrush}">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition/>
+        </Grid.RowDefinitions>
+
+        <!-- 标题区 -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,16">
+            <TextBlock Text="Dashboard"
+                       FontSize="24"
+                       FontWeight="SemiBold" />
+            <TextBlock Text="欢迎使用 WPF UI Fluent 框架壳工程"
+                       Opacity="0.7"
+                       Margin="0,4,0,0"/>
+        </StackPanel>
+
+        <!-- 内容区：卡片布局 -->
+        <UniformGrid Grid.Row="1" Columns="3" Margin="0,8,0,0">
+            <ui:Card Margin="8" IsClickable="True">
+                <StackPanel>
+                    <TextBlock Text="示例 1" FontWeight="SemiBold" />
+                    <TextBlock Text="说明文字，介绍具体功能" Opacity="0.7"
+                               TextWrapping="Wrap" Margin="0,4,0,0"/>
+                    <ui:Button Content="进入"
+                               Margin="0,8,0,0"
+                               HorizontalAlignment="Right"
+                               Appearance="Primary" />
+                </StackPanel>
+            </ui:Card>
+
+            <!-- 再加更多 Card 即可 -->
+        </UniformGrid>
+    </Grid>
+</Page>
+```
+
+`DashboardPage.xaml.cs`：
+
+```csharp
+using System.Windows.Controls;
+
+namespace MyFluentFramework.Views.Pages;
+
+public partial class DashboardPage : Page, INavigablePage
+{
+    public string Title => "Dashboard";
+
+    public DashboardPage()
+    {
+        InitializeComponent();
+    }
+}
+```
+
+其他 `SamplesPage`、`AboutPage` 同理，把你想做的 Fluent 风格控件示例（按钮、表单、列表、对话框等）封装成模块页即可。WPF UI 文档里有 NavigationView、Dialog、Snackbar 等具体用法，可以直接搬到你的页面里试用。[1][4]
+
+## 第四步：抽象成“框架”的关键点
+
+为了“完全仿照 Gallery”但又方便你未来复用，可以多做几层抽象：
+
+- 菜单配置中心  
+  - 建一个 `NavigationItemDefinition` 类（包含标题、图标、Page 类型等），在一个 `NavigationRegistry` 静态类里集中注册。  
+  - MainWindow 启动时从 Registry 读取定义，动态填充 `NavView.MenuItems`，而不是直接在 XAML 里写死。  
+- 主题/语言/设置页  
+  - 参考 Gallery 的 Settings Page，集成 WPF UI 的 ThemeService：切换 Light/Dark/System，持久化到配置文件。[2]
+- 通用基础控件封装  
+  - 用 `ui:Card` 封装一套统一的 “模块卡片” 样式：带标题、副标题、右上角操作按钮。以后各业务页统一用这一套卡片布局。  
+
+示例：导航注册（伪代码）：
+
+```csharp
+public static class NavigationRegistry
+{
+    public static IEnumerable<NavigationItem> GetMainMenu()
+    {
+        yield return new NavigationItem("Dashboard", SymbolRegular.Home24, typeof(DashboardPage));
+        yield return new NavigationItem("Samples", SymbolRegular.DataHistogram24, typeof(SamplesPage));
+    }
+
+    public static IEnumerable<NavigationItem> GetFooterMenu()
+    {
+        yield return new NavigationItem("About", SymbolRegular.Info24, typeof(AboutPage));
+    }
+}
+
+public record NavigationItem(string Title, SymbolRegular Icon, Type PageType);
+```
+
+MainWindow 构造里根据这些定义创建 `NavigationViewItem`，就变成真正意义上的“框架级壳工程”而不是写死的 demo。  
+
+## 第五步：下一步可以做的扩展
+
+- 加入 MVVM 框架（CommunityToolkit.Mvvm），所有 Page 绑 ViewModel，方便业务复用。  
+- 提供模块化加载：每个业务模块一个程序集，只要实现某个接口并在启动时扫描程序集，就可以自动出现在导航菜单中。  
+- 打包为模板：把这个壳工程整理好以后，用 `dotnet new` 自定义模板做成你自己的项目模板，以后创建新项目直接继承这套 WPF UI Fluent 框架。  
+
+如果你愿意，可以把你想仿的那个 GitHub 上的 FluentGallery 仓库地址发一下（或者说明它大概有哪些页面/效果），可以进一步帮你对照着把某一页完整 XAML + 代码后端写出来，你直接复制粘贴就能跑。
+
+来源
+[1] WPF UI | WPF UI https://wpfui.lepo.co
+[2] lepoco/wpfui: WPF UI provides the Fluent experience in ... https://github.com/lepoco/wpfui
+[3] wpfui/src/Wpf.Ui.Gallery/App.xaml.cs at main · lepoco ... https://github.com/lepoco/wpfui/blob/main/src/Wpf.Ui.Gallery/App.xaml.cs
+[4] NavigationView | WPF UI - lepo.co https://wpfui.lepo.co/documentation/navigation-view.html
+[5] DevExpress-Examples/wpf-create-a-fluent-design-using- ... https://github.com/DevExpress-Examples/wpf-create-a-fluent-design-using-appearance-options
+[6] microsoft/WPF-Samples: Repository for WPF related samples https://github.com/microsoft/WPF-Samples
+[7] Fluent Design Toolkit for WPF https://stackoverflow.com/questions/54416677/fluent-design-toolkit-for-wpf
+[8] WPF in .NET 9.0 – Windows 11 Theming https://www.thomasclaudiushuber.com/2025/02/21/wpf-in-net-9-0-windows-11-theming/
+[9] Fluent UI - Get started https://developer.microsoft.com/en-us/fluentui
+[10] GitHub - sourcechord/FluentWPF: Fluent Design System for WPF. https://github.com/sourcechord/FluentWPF
+
+
+
+
+
+
 好，下面这一套我重新从零整理，目标只有一个：
 
 ✅ 在 Wpf.Ui 3.4.2.7 下
