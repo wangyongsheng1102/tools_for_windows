@@ -1,0 +1,996 @@
+目前这轮没法在你电脑上真实编译、运行和自动检查 bug，只能基于前面一起设计的结构，把“完整项目骨架”整合成一份可直接复制的新工程模板，然后指出可能需要你本地确认/微调的地方。
+
+下面给你一套从零可创建的工程代码（.csproj + 所有 XAML / CS），按步骤复制即可运行。
+
+***
+
+## 1. 新建工程与项目文件
+
+在空文件夹下执行（或用 VS 新建 WPF 应用，再替换文件）：
+
+**MyFluentShell.csproj**
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WPF-UI" Version="4.1.0" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.1" />
+  </ItemGroup>
+
+</Project>
+```
+
+然后在项目目录执行一次 `dotnet restore`（或用 VS 自动还原）。
+
+***
+
+## 2. App.xaml / App.xaml.cs
+
+**App.xaml**
+
+```xml
+<Application x:Class="MyFluentShell.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <!-- WPF UI 主题 + 控件样式 -->
+                <ui:ThemesDictionary Theme="Dark" />
+                <ui:ControlsDictionary />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- ========== 通用 Storyboard ========== -->
+
+            <Storyboard x:Key="PageEnterStoryboard">
+                <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                 From="0" To="1"
+                                 Duration="0:0:0.18" />
+                <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.Y)"
+                                 From="8" To="0"
+                                 Duration="0:0:0.18" />
+            </Storyboard>
+
+            <Storyboard x:Key="HoverInStoryboard">
+                <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleX)"
+                                 To="1.03"
+                                 Duration="0:0:0.12" />
+                <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleY)"
+                                 To="1.03"
+                                 Duration="0:0:0.12" />
+            </Storyboard>
+
+            <Storyboard x:Key="HoverOutStoryboard">
+                <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleX)"
+                                 To="1"
+                                 Duration="0:0:0.12" />
+                <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleY)"
+                                 To="1"
+                                 Duration="0:0:0.12" />
+            </Storyboard>
+
+            <!-- ========== Page 通用动画 ========== -->
+
+            <Style x:Key="AnimatedPageStyle" TargetType="Page">
+                <Setter Property="Opacity" Value="0" />
+                <Setter Property="RenderTransform">
+                    <Setter.Value>
+                        <TranslateTransform Y="8" />
+                    </Setter.Value>
+                </Setter>
+
+                <Style.Triggers>
+                    <EventTrigger RoutedEvent="Loaded">
+                        <BeginStoryboard Storyboard="{StaticResource PageEnterStoryboard}" />
+                    </EventTrigger>
+                </Style.Triggers>
+            </Style>
+
+            <!-- ========== Card 动画 ========== -->
+
+            <Style x:Key="AnimatedCardStyle" TargetType="ui:CardControl">
+                <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+                <Setter Property="RenderTransform">
+                    <Setter.Value>
+                        <ScaleTransform ScaleX="1" ScaleY="1" />
+                    </Setter.Value>
+                </Setter>
+                <Setter Property="Effect">
+                    <Setter.Value>
+                        <DropShadowEffect BlurRadius="8"
+                                          ShadowDepth="0"
+                                          Opacity="0.15" />
+                </Setter.Value>
+                </Setter>
+
+                <Style.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Trigger.EnterActions>
+                            <BeginStoryboard Storyboard="{StaticResource HoverInStoryboard}" />
+                        </Trigger.EnterActions>
+                        <Trigger.ExitActions>
+                            <BeginStoryboard Storyboard="{StaticResource HoverOutStoryboard}" />
+                        </Trigger.ExitActions>
+                    </Trigger>
+
+                    <Trigger Property="IsPressed" Value="True">
+                        <Setter Property="RenderTransform">
+                            <Setter.Value>
+                                <ScaleTransform ScaleX="0.98" ScaleY="0.98" />
+                            </Setter.Value>
+                        </Setter>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+            <!-- ========== Button 动画 ========== -->
+
+            <Style x:Key="AnimatedPrimaryButtonStyle"
+                   TargetType="ui:Button"
+                   BasedOn="{StaticResource {x:Type ui:Button}}">
+                <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+                <Setter Property="RenderTransform">
+                    <Setter.Value>
+                        <ScaleTransform ScaleX="1" ScaleY="1" />
+                    </Setter.Value>
+                </Setter>
+
+                <Style.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Trigger.EnterActions>
+                            <BeginStoryboard Storyboard="{StaticResource HoverInStoryboard}" />
+                        </Trigger.EnterActions>
+                        <Trigger.ExitActions>
+                            <BeginStoryboard Storyboard="{StaticResource HoverOutStoryboard}" />
+                        </Trigger.ExitActions>
+                    </Trigger>
+
+                    <Trigger Property="IsPressed" Value="True">
+                        <Setter Property="RenderTransform">
+                            <Setter.Value>
+                                <ScaleTransform ScaleX="0.97" ScaleY="0.97" />
+                            </Setter.Value>
+                        </Setter>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+            <!-- ========== Acrylic 背景 ========== -->
+
+            <LinearGradientBrush x:Key="AcrylicTintBrush"
+                                 StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Color="#CC1E242F" Offset="0" />
+                <GradientStop Color="#CC283547" Offset="1" />
+            </LinearGradientBrush>
+
+            <Style x:Key="AcrylicPanelStyle" TargetType="Border">
+                <Setter Property="Background" Value="{StaticResource AcrylicTintBrush}" />
+                <Setter Property="CornerRadius" Value="24" />
+                <Setter Property="Effect">
+                    <Setter.Value>
+                        <BlurEffect Radius="18" />
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>
+```
+
+**App.xaml.cs**
+
+```csharp
+using System.Windows;
+
+namespace MyFluentShell;
+
+public partial class App : Application
+{
+}
+```
+
+***
+
+## 3. 模型与配置
+
+创建文件夹 **Models**、**Configuration**。
+
+**Models/AppPage.cs & NavigationItemModel.cs**
+
+```csharp
+namespace MyFluentShell.Models;
+
+public enum AppPage
+{
+    Home,
+    Input,
+    Controls,
+    Colors,
+    Icons
+}
+
+public class NavigationItemModel
+{
+    public AppPage Page { get; init; }
+    public string Title { get; init; } = "";
+    public string Description { get; init; } = "";
+    public string Icon { get; init; } = "";
+    public System.Type? PageType { get; init; }
+}
+```
+
+**Configuration/NavigationConfig.cs**
+
+```csharp
+using System.Collections.Generic;
+using MyFluentShell.Models;
+using MyFluentShell.Views.Pages;
+
+namespace MyFluentShell.Configuration;
+
+public static class NavigationConfig
+{
+    public static IReadOnlyList<NavigationItemModel> MainItems { get; } =
+        new[]
+        {
+            new NavigationItemModel
+            {
+                Page = AppPage.Home,
+                Title = "Home",
+                Description = "",
+                Icon = "Home24",
+                PageType = typeof(HomePage)
+            },
+            new NavigationItemModel
+            {
+                Page = AppPage.Controls,
+                Title = "Controls",
+                Description = "Fluent & Modern",
+                Icon = "Textbox24",
+                PageType = typeof(ControlsPage)
+            },
+            new NavigationItemModel
+            {
+                Page = AppPage.Input,
+                Title = "Input",
+                Description = "Form inputs",
+                Icon = "FormNew24",
+                PageType = typeof(InputPage)
+            },
+            new NavigationItemModel
+            {
+                Page = AppPage.Colors,
+                Title = "Colors",
+                Description = "Themes & Palette",
+                Icon = "Color24",
+                PageType = typeof(ColorsPage)
+            },
+            new NavigationItemModel
+            {
+                Page = AppPage.Icons,
+                Title = "Icons",
+                Description = "Fluent System Icons",
+                Icon = "Info24",
+                PageType = typeof(IconsPage)
+            }
+        };
+
+    public static IReadOnlyList<NavigationItemModel> HomeCards { get; } =
+        new[]
+        {
+            MainItems[2], // Input
+            MainItems[1], // Controls
+            MainItems[3], // Colors
+            MainItems[4]  // Icons
+        };
+}
+```
+
+***
+
+## 4. ViewModels
+
+创建文件夹 **ViewModels**。
+
+**ViewModels/NavigationItemViewModel.cs**
+
+```csharp
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using MyFluentShell.Models;
+
+namespace MyFluentShell.ViewModels;
+
+public partial class NavigationItemViewModel : ObservableObject
+{
+    public AppPage Page { get; }
+    public string Title { get; }
+    public string Description { get; }
+    public string Icon { get; }
+
+    public IRelayCommand NavigateCommand { get; }
+
+    public NavigationItemViewModel(
+        AppPage page,
+        string title,
+        string description,
+        string icon,
+        IRelayCommand navigateCommand)
+    {
+        Page = page;
+        Title = title;
+        Description = description;
+        Icon = icon;
+        NavigateCommand = navigateCommand;
+    }
+}
+```
+
+**ViewModels/MainWindowViewModel.cs**
+
+```csharp
+using System.Collections.ObjectModel;
+using System.Linq;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using MyFluentShell.Configuration;
+using MyFluentShell.Models;
+using Wpf.Ui.Appearance;
+using Wpf.Ui.Controls;
+using Wpf.Ui.Navigation;
+
+namespace MyFluentShell.ViewModels;
+
+public partial class MainWindowViewModel : ObservableObject
+{
+    private readonly INavigationService _navigationService;
+
+    [ObservableProperty]
+    private string title = "WPF UI - Fluent design system";
+
+    [ObservableProperty]
+    private string header = "Home";
+
+    public ObservableCollection<NavigationItemViewModel> MenuItems { get; } = new();
+
+    [ObservableProperty]
+    private NavigationItemViewModel? selectedMenuItem;
+
+    public IRelayCommand<AppPage> NavigateCommand { get; }
+    public IRelayCommand ToggleThemeCommand { get; }
+
+    public MainWindowViewModel(INavigationService navigationService)
+    {
+        _navigationService = navigationService;
+
+        NavigateCommand = new RelayCommand<AppPage>(NavigateTo);
+        ToggleThemeCommand = new RelayCommand(ToggleTheme);
+
+        foreach (var cfg in NavigationConfig.MainItems)
+        {
+            MenuItems.Add(new NavigationItemViewModel(
+                cfg.Page,
+                cfg.Title,
+                cfg.Description,
+                cfg.Icon,
+                new RelayCommand(() => NavigateTo(cfg.Page))));
+        }
+    }
+
+    public void OnLoaded()
+    {
+        NavigateTo(AppPage.Home);
+
+        var home = MenuItems.FirstOrDefault(m => m.Page == AppPage.Home);
+        if (home != null)
+            SelectedMenuItem = home;
+    }
+
+    partial void OnSelectedMenuItemChanged(NavigationItemViewModel? value)
+    {
+        if (value == null)
+            return;
+
+        NavigateTo(value.Page);
+    }
+
+    private void NavigateTo(AppPage page)
+    {
+        var cfg = NavigationConfig.MainItems.First(p => p.Page == page);
+        if (cfg.PageType == null)
+            return;
+
+        _navigationService.Navigate(cfg.PageType);
+
+        Header = cfg.Title;
+        Title  = page == AppPage.Home
+            ? "WPF UI - Fluent design system"
+            : $"WPF UI - {cfg.Title}";
+    }
+
+    private void ToggleTheme()
+    {
+        var current = ApplicationThemeManager.GetAppTheme();
+        var target = current == ApplicationTheme.Dark
+            ? ApplicationTheme.Light
+            : ApplicationTheme.Dark;
+
+        ApplicationThemeManager.Apply(target);
+    }
+}
+```
+
+**ViewModels/HomePageViewModel.cs**
+
+```csharp
+using System.Collections.ObjectModel;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using MyFluentShell.Configuration;
+using MyFluentShell.Models;
+
+namespace MyFluentShell.ViewModels;
+
+public partial class HomePageViewModel : ObservableObject
+{
+    public ObservableCollection<NavigationItemViewModel> Cards { get; } = new();
+
+    public IRelayCommand<AppPage> NavigateCommand { get; }
+
+    public HomePageViewModel(IRelayCommand<AppPage> globalNavigateCommand)
+    {
+        NavigateCommand = globalNavigateCommand;
+
+        foreach (var cfg in NavigationConfig.HomeCards)
+        {
+            Cards.Add(new NavigationItemViewModel(
+                cfg.Page,
+                cfg.Title,
+                cfg.Description,
+                cfg.Icon,
+                new RelayCommand(() => NavigateCommand.Execute(cfg.Page))));
+        }
+    }
+}
+```
+
+**空 ViewModel 占位**
+
+```csharp
+// InputPageViewModel.cs
+using CommunityToolkit.Mvvm.ComponentModel;
+
+namespace MyFluentShell.ViewModels;
+
+public partial class InputPageViewModel : ObservableObject
+{
+}
+
+// ControlsPageViewModel.cs
+using CommunityToolkit.Mvvm.ComponentModel;
+
+namespace MyFluentShell.ViewModels;
+
+public partial class ControlsPageViewModel : ObservableObject
+{
+}
+
+// ColorsPageViewModel.cs
+using CommunityToolkit.Mvvm.ComponentModel;
+
+namespace MyFluentShell.ViewModels;
+
+public partial class ColorsPageViewModel : ObservableObject
+{
+}
+
+// IconsPageViewModel.cs
+using CommunityToolkit.Mvvm.ComponentModel;
+
+namespace MyFluentShell.ViewModels;
+
+public partial class IconsPageViewModel : ObservableObject
+{
+}
+```
+
+***
+
+## 5. MainWindow 视图
+
+**MainWindow.xaml**
+
+```xml
+<ui:FluentWindow x:Class="MyFluentShell.MainWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 xmlns:vm="clr-namespace:MyFluentShell.ViewModels"
+                 Title="{Binding Title}"
+                 Width="1280"
+                 Height="720"
+                 WindowStartupLocation="CenterScreen">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition />
+        </Grid.RowDefinitions>
+
+        <!-- 顶部标题栏 -->
+        <ui:TitleBar Grid.Row="0"
+                     Title="{Binding Header}"
+                     Icon="Apps24" />
+
+        <!-- 背景 + Acrylic 层 -->
+        <Grid Grid.Row="1">
+            <Grid>
+                <Grid.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Color="#FF1F2430" Offset="0" />
+                        <GradientStop Color="#FF1F3A4A" Offset="1" />
+                    </LinearGradientBrush>
+                </Grid.Background>
+            </Grid>
+
+            <Border Background="#B31E1E1E">
+                <Border.Effect>
+                    <BlurEffect Radius="16" />
+                </Border.Effect>
+            </Border>
+
+            <!-- 主 NavigationView -->
+            <ui:NavigationView x:Name="NavView"
+                               CanResizePane="False"
+                               IsBackButtonVisible="Collapsed"
+                               IsPaneToggleButtonVisible="True"
+                               IsSettingsVisible="True"
+                               PaneDisplayMode="LeftCompact"
+                               ItemsSource="{Binding MenuItems}"
+                               SelectedItem="{Binding SelectedMenuItem, Mode=TwoWay}">
+                <ui:NavigationView.ItemTemplate>
+                    <DataTemplate DataType="{x:Type vm:NavigationItemViewModel}">
+                        <ui:NavigationViewItem
+                            Content="{Binding Title}"
+                            Icon="{Binding Icon}"
+                            Tag="{Binding Page}" />
+                    </DataTemplate>
+                </ui:NavigationView.ItemTemplate>
+
+                <ui:NavigationView.FooterMenuItems>
+                    <ui:NavigationViewItem
+                        Content="Theme"
+                        Icon="DarkTheme24"
+                        Command="{Binding ToggleThemeCommand}" />
+                </ui:NavigationView.FooterMenuItems>
+            </ui:NavigationView>
+        </Grid>
+    </Grid>
+</ui:FluentWindow>
+```
+
+**MainWindow.xaml.cs**
+
+```csharp
+using System.Windows;
+using MyFluentShell.ViewModels;
+using Wpf.Ui.Controls;
+using Wpf.Ui.Navigation;
+
+namespace MyFluentShell;
+
+public partial class MainWindow : FluentWindow
+{
+    private readonly INavigationService _navigationService = new NavigationService();
+
+    public MainWindow()
+    {
+        InitializeComponent();
+
+        _navigationService.SetNavigationControl(NavView);
+        DataContext = new MainWindowViewModel(_navigationService);
+
+        Loaded += (_, _) =>
+        {
+            if (DataContext is MainWindowViewModel vm)
+                vm.OnLoaded();
+        };
+    }
+}
+```
+
+***
+
+## 6. 各页面视图
+
+创建文件夹 **Views/Pages**。
+
+### HomePage
+
+**HomePage.xaml**
+
+```xml
+<Page x:Class="MyFluentShell.Views.Pages.HomePage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      xmlns:vm="clr-namespace:MyFluentShell.ViewModels"
+      Background="{DynamicResource ApplicationBackgroundBrush}"
+      Style="{StaticResource AnimatedPageStyle}">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 上半 Banner -->
+        <Grid Grid.Row="0" Margin="8">
+            <Border Style="{StaticResource AcrylicPanelStyle}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="3*" />
+                        <ColumnDefinition Width="2*" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- 左侧文字 -->
+                    <StackPanel Grid.Column="0"
+                                Margin="40"
+                                VerticalAlignment="Center"
+                                Spacing="12">
+                        <TextBlock Text="Windows Presentation Foundation"
+                                   FontSize="18"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="Fluent UI"
+                                   FontSize="36"
+                                   FontWeight="Bold" />
+                        <TextBlock Text="Build Fluent experiences on Windows using WPF UI."
+                                   FontSize="16"
+                                   Opacity="0.9"
+                                   TextWrapping="Wrap"
+                                   Width="360" />
+
+                        <ui:Button Content="Check out the controls"
+                                   Width="220"
+                                   Margin="0,16,0,0"
+                                   Appearance="Primary"
+                                   Style="{StaticResource AnimatedPrimaryButtonStyle}"
+                                   Command="{Binding Cards[1].NavigateCommand}" />
+                    </StackPanel>
+
+                    <!-- 右侧装饰 -->
+                    <Grid Grid.Column="1" Margin="40">
+                        <Ellipse Fill="#33FFFFFF"
+                                 Width="220"
+                                 Height="220"
+                                 HorizontalAlignment="Left"
+                                 VerticalAlignment="Bottom" />
+                        <Rectangle Fill="#552B88FF"
+                                   RadiusX="32"
+                                   RadiusY="32"
+                                   Width="260"
+                                   Height="170"
+                                   HorizontalAlignment="Left"
+                                   VerticalAlignment="Top"
+                                   Margin="40,40,0,0" />
+                        <Rectangle Fill="#7733C4FF"
+                                   RadiusX="24"
+                                   RadiusY="24"
+                                   Width="180"
+                                   Height="120"
+                                   HorizontalAlignment="Right"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,20,0" />
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- 下半卡片条 -->
+        <ScrollViewer Grid.Row="1"
+                      Margin="8,24,8,8"
+                      HorizontalScrollBarVisibility="Hidden"
+                      VerticalScrollBarVisibility="Disabled">
+            <ItemsControl ItemsSource="{Binding Cards}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="{x:Type vm:NavigationItemViewModel}">
+                        <ui:CardControl Width="260"
+                                        Margin="4"
+                                        Header="{Binding Title}"
+                                        Description="{Binding Description}"
+                                        Icon="{Binding Icon}"
+                                        Command="{Binding NavigateCommand}"
+                                        Style="{StaticResource AnimatedCardStyle}" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </Grid>
+</Page>
+```
+
+**HomePage.xaml.cs**
+
+```csharp
+using System.Windows.Controls;
+using MyFluentShell.Models;
+using MyFluentShell.ViewModels;
+
+namespace MyFluentShell.Views.Pages;
+
+public partial class HomePage : Page
+{
+    public HomePage()
+    {
+        InitializeComponent();
+
+        if (System.Windows.Application.Current.MainWindow?.DataContext
+            is MainWindowViewModel mainVm)
+        {
+            DataContext = new HomePageViewModel(mainVm.NavigateCommand);
+        }
+        else
+        {
+            DataContext = new HomePageViewModel(
+                new CommunityToolkit.Mvvm.Input.RelayCommand<AppPage>(_ => { }));
+        }
+    }
+}
+```
+
+### 其它页面（Input / Controls / Colors / Icons）
+
+**InputPage.xaml**
+
+```xml
+<Page x:Class="MyFluentShell.Views.Pages.InputPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Background="{DynamicResource ApplicationBackgroundBrush}"
+      Style="{StaticResource AnimatedPageStyle}">
+    <Grid Margin="24">
+        <StackPanel Spacing="8">
+            <TextBlock Text="Input"
+                       FontSize="28"
+                       FontWeight="SemiBold" />
+            <TextBlock Text="Form input examples."
+                       Opacity="0.8" />
+
+            <StackPanel Margin="0,16,0,0" Spacing="8">
+                <ui:TextBox PlaceholderText="Text input" />
+                <ui:PasswordBox PlaceholderText="Password" />
+                <ui:NumberBox Header="Number" />
+            </StackPanel>
+        </StackPanel>
+    </Grid>
+</Page>
+```
+
+**InputPage.xaml.cs**
+
+```csharp
+using System.Windows.Controls;
+using MyFluentShell.ViewModels;
+
+namespace MyFluentShell.Views.Pages;
+
+public partial class InputPage : Page
+{
+    public InputPage()
+    {
+        InitializeComponent();
+        DataContext = new InputPageViewModel();
+    }
+}
+```
+
+**ControlsPage.xaml**
+
+```xml
+<Page x:Class="MyFluentShell.Views.Pages.ControlsPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Background="{DynamicResource ApplicationBackgroundBrush}"
+      Style="{StaticResource AnimatedPageStyle}">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Spacing="8">
+            <TextBlock Text="Controls"
+                       FontSize="28"
+                       FontWeight="SemiBold" />
+            <TextBlock Text="Fluent &amp; modern controls."
+                       Opacity="0.8" />
+        </StackPanel>
+
+        <UniformGrid Grid.Row="1"
+                     Margin="0,16,0,0"
+                     Columns="2">
+            <ui:CardControl Margin="6"
+                            Header="Buttons"
+                            Description="Primary, subtle and icon buttons"
+                            Style="{StaticResource AnimatedCardStyle}">
+                <ui:CardControl.Content>
+                    <StackPanel Margin="0,8,0,0" Spacing="6">
+                        <ui:Button Content="Primary"
+                                   Appearance="Primary"
+                                   Style="{StaticResource AnimatedPrimaryButtonStyle}" />
+                        <ui:Button Content="Subtle"
+                                   Appearance="Subtle"
+                                   Style="{StaticResource AnimatedPrimaryButtonStyle}" />
+                        <ui:Button Content="Destructive"
+                                   Appearance="Danger"
+                                   Style="{StaticResource AnimatedPrimaryButtonStyle}" />
+                    </StackPanel>
+                </ui:CardControl.Content>
+            </ui:CardControl>
+
+            <ui:CardControl Margin="6"
+                            Header="Toggles"
+                            Description="ToggleSwitch, CheckBox, RadioButton"
+                            Style="{StaticResource AnimatedCardStyle}">
+                <ui:CardControl.Content>
+                    <StackPanel Margin="0,8,0,0" Spacing="6">
+                        <ui:ToggleSwitch Content="Enable feature" />
+                        <CheckBox Content="Check me" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <RadioButton Content="Option A" GroupName="Demo" />
+                            <RadioButton Content="Option B" GroupName="Demo" />
+                        </StackPanel>
+                    </StackPanel>
+                </ui:CardControl.Content>
+            </ui:CardControl>
+        </UniformGrid>
+    </Grid>
+</Page>
+```
+
+**ControlsPage.xaml.cs**
+
+```csharp
+using System.Windows.Controls;
+using MyFluentShell.ViewModels;
+
+namespace MyFluentShell.Views.Pages;
+
+public partial class ControlsPage : Page
+{
+    public ControlsPage()
+    {
+        InitializeComponent();
+        DataContext = new ControlsPageViewModel();
+    }
+}
+```
+
+**ColorsPage.xaml**
+
+```xml
+<Page x:Class="MyFluentShell.Views.Pages.ColorsPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Background="{DynamicResource ApplicationBackgroundBrush}"
+      Style="{StaticResource AnimatedPageStyle}">
+    <Grid Margin="24">
+        <StackPanel Spacing="8">
+            <TextBlock Text="Colors"
+                       FontSize="28"
+                       FontWeight="SemiBold" />
+            <TextBlock Text="Theme &amp; palette preview."
+                       Opacity="0.8" />
+
+            <StackPanel Orientation="Horizontal" Margin="0,16,0,0" Spacing="8">
+                <Border Width="80" Height="80" CornerRadius="12"
+                        Background="{DynamicResource AccentBrush}" />
+                <Border Width="80" Height="80" CornerRadius="12"
+                        Background="{DynamicResource AccentSecondaryBrush}" />
+                <Border Width="80" Height="80" CornerRadius="12"
+                        Background="{DynamicResource ApplicationBackgroundBrush}" />
+            </StackPanel>
+        </StackPanel>
+    </Grid>
+</Page>
+```
+
+**ColorsPage.xaml.cs**
+
+```csharp
+using System.Windows.Controls;
+using MyFluentShell.ViewModels;
+
+namespace MyFluentShell.Views.Pages;
+
+public partial class ColorsPage : Page
+{
+    public ColorsPage()
+    {
+        InitializeComponent();
+        DataContext = new ColorsPageViewModel();
+    }
+}
+```
+
+**IconsPage.xaml**
+
+```xml
+<Page x:Class="MyFluentShell.Views.Pages.IconsPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Background="{DynamicResource ApplicationBackgroundBrush}"
+      Style="{StaticResource AnimatedPageStyle}">
+    <Grid Margin="24">
+        <StackPanel Spacing="8">
+            <TextBlock Text="Icons"
+                       FontSize="28"
+                       FontWeight="SemiBold" />
+            <TextBlock Text="Fluent System Icons preview."
+                       Opacity="0.8" />
+
+            <StackPanel Orientation="Horizontal" Margin="0,16,0,0" Spacing="12">
+                <ui:SymbolIcon Symbol="Home24" />
+                <ui:SymbolIcon Symbol="Textbox24" />
+                <ui:SymbolIcon Symbol="FormNew24" />
+                <ui:SymbolIcon Symbol="Color24" />
+                <ui:SymbolIcon Symbol="Info24" />
+            </StackPanel>
+        </StackPanel>
+    </Grid>
+</Page>
+```
+
+**IconsPage.xaml.cs**
+
+```csharp
+using System.Windows.Controls;
+using MyFluentShell.ViewModels;
+
+namespace MyFluentShell.Views.Pages;
+
+public partial class IconsPage : Page
+{
+    public IconsPage()
+    {
+        InitializeComponent();
+        DataContext = new IconsPageViewModel();
+    }
+}
+```
+
+***
+
+## 7. 本地需要你确认的几点
+
+因为当前没法在你的机器上真实编译，这里列一下你需要本地检查的地方：
+
+- NuGet 包版本：`WPF-UI` 可能有新版本，若 4.1.0 不存在，改成最新 4.x 即可。  
+- 命名空间：所有 `xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"` 必须完全一致，否则 XAML 找不到控件。  
+- 如果生成代码时有任意名称拼写差异（文件名 / 类名不对），VS 会有明确的红线提示，你可以把具体错误信息贴出来，方便进一步帮你对症调整。  
+
+整体结构已经尽量对齐官方 Gallery：  
+- FluentWindow + TitleBar + NavigationView 壳。  
+- MVVM 导航（AppPage + NavigationConfig + MainWindowViewModel）。  
+- Home 页 Banner + 下方卡片条 + 动画 + Acrylic。  
+- 子页统一 AnimatedPageStyle、独立 ViewModel，可随时加业务逻辑。
+
+你可以先按顺序把这些文件建好，再运行一下。如果遇到任何编译错误，把报错行和提示发出来，可以再帮你逐条排查到可以完全通过为止。
+
+来源
