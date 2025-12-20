@@ -1,0 +1,249 @@
+下面给你一个“全部写在 `MainWindow.axaml` + `MainWindow.axaml.cs`”的完整示例：窗口支持从外部拖拽**单个或多个文件/文件夹**进来，自动解析并显示到表格，底部有执行/配置按钮和进度条。[1][2]
+
+***
+
+## MainWindow.axaml 示例
+
+```xml
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        x:Class="YourApp.MainWindow"
+        Width="800"
+        Height="600"
+        Title="文件解析工具">
+
+    <Grid x:Name="RootGrid"
+          RowDefinitions="Auto,*,Auto,Auto"
+          Margin="16">
+
+        <!-- 顶部提示 + 当前拖入数量 -->
+        <StackPanel Orientation="Horizontal"
+                    Spacing="8">
+            <TextBlock Text="从资源管理器拖拽文件或文件夹到窗口任意位置进行解析。" />
+            <TextBlock x:Name="HintText"
+                       Foreground="Gray"
+                       Text="尚未选择文件" />
+        </StackPanel>
+
+        <!-- 中间 DataGrid 展示解析结果 -->
+        <DataGrid Grid.Row="1"
+                  Margin="0,12,0,12"
+                  AutoGenerateColumns="False"
+                  Items="{Binding}">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="文件路径"
+                                    Binding="{Binding FilePath}" />
+                <DataGridTextColumn Header="列1"
+                                    Binding="{Binding Column1}" />
+                <DataGridTextColumn Header="列2"
+                                    Binding="{Binding Column2}" />
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <!-- 执行/配置按钮 -->
+        <StackPanel Grid.Row="2"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8">
+            <Button x:Name="ConfigButton"
+                    Content="配置"
+                    MinWidth="80" />
+            <Button x:Name="ExecuteButton"
+                    Content="执行"
+                    MinWidth="80" />
+        </StackPanel>
+
+        <!-- 底部进度条 -->
+        <ProgressBar x:Name="Progress"
+                     Grid.Row="3"
+                     Margin="0,12,0,0"
+                     Minimum="0"
+                     Maximum="100"
+                     Value="0"
+                     ShowProgressText="True" />
+    </Grid>
+</Window>
+```
+
+说明：  
+- 整个 `Window` 上用 `AddHandler` 来接收拖拽事件，不强绑 MVVM，方便你先跑通逻辑。[2][1]
+- `DataGrid.Items` 直接绑定到一个 `ObservableCollection<ParsedItem>`（在 cs 里设置 `DataContext`）。
+
+***
+
+## MainWindow.axaml.cs 示例
+
+```csharp
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Markup.Xaml;
+using System;
+using System.Collections.ObjectModel;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+
+namespace YourApp
+{
+    public partial class MainWindow : Window
+    {
+        private ObservableCollection<ParsedItem> _items = new();
+        private TextBlock _hintText = null!;
+        private ProgressBar _progress = null!;
+        private Button _executeButton = null!;
+        private Button _configButton = null!;
+
+        public MainWindow()
+        {
+            InitializeComponent();
+
+#if DEBUG
+            this.AttachDevTools();
+#endif
+
+            // 设置 DataGrid 的数据源
+            DataContext = _items;
+
+            _hintText = this.FindControl<TextBlock>("HintText");
+            _progress = this.FindControl<ProgressBar>("Progress");
+            _executeButton = this.FindControl<Button>("ExecuteButton");
+            _configButton = this.FindControl<Button>("ConfigButton");
+
+            _executeButton.Click += ExecuteButton_Click;
+            _configButton.Click += ConfigButton_Click;
+
+            // 窗体级别拖拽事件
+            AddHandler(DragDrop.DragOverEvent, OnDragOver);
+            AddHandler(DragDrop.DropEvent, OnDrop);
+        }
+
+        private void OnDragOver(object? sender, DragEventArgs e)
+        {
+            // 仅允许有文件/文件夹的拖拽
+            var files = e.Data.GetFileNames();
+            if (files != null && files.Any())
+            {
+                e.DragEffects = DragDropEffects.Copy;
+            }
+            else
+            {
+                e.DragEffects = DragDropEffects.None;
+            }
+
+            e.Handled = true;
+        }
+
+        private async void OnDrop(object? sender, DragEventArgs e)
+        {
+            var files = e.Data.GetFileNames();
+            if (files == null || !files.Any())
+                return;
+
+            var paths = files.ToList();
+            _hintText.Text = $"已拖入 {paths.Count} 个路径";
+
+            _items.Clear();
+            _progress.Value = 0;
+
+            // 简单异步解析示例：遍历所有路径，更新进度条
+            await Task.Run(() =>
+            {
+                var allFiles = paths
+                    .SelectMany(p =>
+                    {
+                        if (Directory.Exists(p))
+                        {
+                            // 这里可以按需过滤扩展名
+                            return Directory.EnumerateFiles(p, "*.*", SearchOption.AllDirectories);
+                        }
+                        else if (File.Exists(p))
+                        {
+                            return new[] { p };
+                        }
+                        else
+                        {
+                            return Array.Empty<string>();
+                        }
+                    })
+                    .ToList();
+
+                int total = allFiles.Count;
+                int index = 0;
+
+                foreach (var filePath in allFiles)
+                {
+                    // 示例解析：实际替换成你的解析逻辑
+                    var parsed = ParseFile(filePath);
+
+                    // 切回 UI 线程更新集合和进度
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        _items.Add(parsed);
+                        if (total > 0)
+                        {
+                            _progress.Value = (double)++index / total * 100.0;
+                        }
+                    });
+                }
+            });
+        }
+
+        private ParsedItem ParseFile(string filePath)
+        {
+            // TODO: 这里写你真实的解析逻辑
+            return new ParsedItem
+            {
+                FilePath = filePath,
+                Column1 = "示例值1",
+                Column2 = "示例值2"
+            };
+        }
+
+        private void ExecuteButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            // TODO: 执行按钮逻辑，比如根据 _items 做进一步处理
+            _hintText.Text = "执行完成";
+        }
+
+        private void ConfigButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            // TODO: 配置按钮逻辑，比如弹配置窗口
+            _hintText.Text = "打开配置界面（示例）";
+        }
+
+        private void InitializeComponent()
+        {
+            AvaloniaXamlLoader.Load(this);
+        }
+    }
+
+    public class ParsedItem
+    {
+        public string FilePath { get; set; } = string.Empty;
+        public string Column1 { get; set; } = string.Empty;
+        public string Column2 { get; set; } = string.Empty;
+    }
+}
+```
+
+要点：  
+- 使用 `AddHandler(DragDrop.DragOverEvent, ...)` 和 `AddHandler(DragDrop.DropEvent, ...)` 来处理窗体级拖拽，`GetFileNames()` 可以取到从资源管理器拖进来的文件/文件夹路径。[3][1]
+- `Task.Run` 里做解析，利用 `Dispatcher.UIThread.Post` 回到 UI 线程更新 `ObservableCollection` 和进度条。[4]
+
+如果你把命名空间、类名改成自己项目的即可直接编译运行，有问题可以把报错贴出来继续调。
+
+来源
+[1] Drag&Drop from outside app (example : drag from Explorer) https://github.com/AvaloniaUI/Avalonia.Xaml.Behaviors/discussions/118
+[2] Why Drag&Drop with files doesn't work in a Window of an Avalonia application? https://stackoverflow.com/questions/63274054/why-dragdrop-with-files-doesnt-work-in-a-window-of-an-avalonia-application
+[3] Files Drag'n'Drop · AvaloniaUI Avalonia · Discussion #10602 https://github.com/AvaloniaUI/Avalonia/discussions/10602
+[4] DragEventArgs Class - Avalonia API-Reference https://api-docs.avaloniaui.net/docs/T_Avalonia_Input_DragEventArgs
+[5] File Drag and Drop Not Working · AvaloniaUI Avalonia · Discussion #17117 https://github.com/AvaloniaUI/Avalonia/discussions/17117
+[6] Files Drag'n'Drop https://www.reddit.com/r/AvaloniaUI/comments/11lvy2r/files_dragndrop/
+[7] Code-behind | Avalonia Docs https://docs.avaloniaui.net/docs/basics/user-interface/code-behind
+[8] File Picker Options | Avalonia Docs https://docs.avaloniaui.net/docs/concepts/services/storage-provider/file-picker-options
+[9] How do I give events to items made by a DataTemplate? https://www.reddit.com/r/AvaloniaUI/comments/10sm1qm/how_do_i_give_events_to_items_made_by_a/
+[10] (MacOS) Issue when DragEnter from Finder #160 https://github.com/AvaloniaUI/Avalonia.Xaml.Behaviors/issues/160
