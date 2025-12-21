@@ -1,0 +1,263 @@
+好，下面我直接给你一套「可运行级别」的 Avalonia UI 布局代码，不是示意，而是你新建 Avalonia 项目后可以直接粘进去用的那种。
+我会控制在UI 层（Axaml），不掺杂复杂逻辑，方便你后续接 MVVM / 图像算法。
+
+⸻
+
+一、整体说明（你在工程里怎么放）
+
+Views/
+ ├─ MainWindow.axaml        ← 主界面（下面给的）
+ ├─ Controls/
+ │   ├─ CompareResultItem.axaml（可后拆）
+ │   ├─ ImageCompareViewer.axaml（可后拆）
+
+👉 现在先全部写在 MainWindow.axaml，你后面再拆都行
+
+⸻
+
+二、MainWindow.axaml（完整 UI 代码）
+
+目标：
+	•	顶部：Excel + Sheet + 列选择
+	•	左侧：多行对比结果（3 缩略图）
+	•	右侧：单行大图查看
+
+⸻
+
+MainWindow.axaml
+
+<Window
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    x:Class="PixelCompareSuite.Views.MainWindow"
+    Width="1400"
+    Height="900"
+    Background="#1E1E1E"
+    Title="PixelCompareSuite">
+
+    <Grid RowDefinitions="Auto,*"
+          ColumnDefinitions="*">
+
+        <!-- ================= 顶部配置区 ================= -->
+        <Border
+            Grid.Row="0"
+            Background="#252525"
+            Padding="16"
+            BorderBrush="#333"
+            BorderThickness="0,0,0,1">
+
+            <Grid ColumnDefinitions="Auto,12,Auto,12,Auto,12,Auto,12,Auto,*,Auto">
+                <!-- Excel 文件 -->
+                <StackPanel>
+                    <TextBlock Text="Excel 文件"
+                               Foreground="#AAA"
+                               FontSize="12"/>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBox Width="260"/>
+                        <Button Content="浏览"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Sheet -->
+                <StackPanel Grid.Column="2">
+                    <TextBlock Text="Sheet"
+                               Foreground="#AAA"
+                               FontSize="12"/>
+                    <ComboBox Width="140"/>
+                </StackPanel>
+
+                <!-- 左列 -->
+                <StackPanel Grid.Column="4">
+                    <TextBlock Text="左列"
+                               Foreground="#AAA"
+                               FontSize="12"/>
+                    <ComboBox Width="100"/>
+                </StackPanel>
+
+                <!-- 右列 -->
+                <StackPanel Grid.Column="6">
+                    <TextBlock Text="右列"
+                               Foreground="#AAA"
+                               FontSize="12"/>
+                    <ComboBox Width="100"/>
+                </StackPanel>
+
+                <!-- 阈值 -->
+                <StackPanel Grid.Column="8">
+                    <TextBlock Text="像素阈值"
+                               Foreground="#AAA"
+                               FontSize="12"/>
+                    <Slider Width="160"
+                            Minimum="0"
+                            Maximum="255"/>
+                </StackPanel>
+
+                <!-- 执行按钮 -->
+                <Button Grid.Column="10"
+                        Content="开始对比"
+                        Height="40"
+                        Padding="24,0"
+                        Background="#4CC2FF"
+                        Foreground="Black"
+                        VerticalAlignment="Bottom"/>
+            </Grid>
+        </Border>
+
+        <!-- ================= 主体区域 ================= -->
+        <Grid Grid.Row="1"
+              ColumnDefinitions="320,*">
+
+            <!-- ========== 左侧：结果缩略列表 ========== -->
+            <Border
+                Grid.Column="0"
+                Background="#202020"
+                BorderBrush="#333"
+                BorderThickness="0,0,1,0">
+
+                <ListBox
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Padding="8"
+                    SelectionMode="Single">
+
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Border
+                                Margin="0,0,0,12"
+                                Padding="8"
+                                CornerRadius="6"
+                                Background="#2A2A2A">
+
+                                <StackPanel Spacing="6">
+
+                                    <!-- 行信息 -->
+                                    <DockPanel>
+                                        <TextBlock Text="行 12"
+                                                   Foreground="#DDD"
+                                                   DockPanel.Dock="Left"/>
+                                        <TextBlock Text="差异：8"
+                                                   Foreground="#FFB020"
+                                                   DockPanel.Dock="Right"/>
+                                    </DockPanel>
+
+                                    <!-- 三张缩略图 -->
+                                    <UniformGrid Columns="3"
+                                                 Rows="1"
+                                                 HorizontalAlignment="Stretch"
+                                                 VerticalAlignment="Center"
+                                                 Margin="0,4,0,0">
+
+                                        <Border Background="#111"
+                                                CornerRadius="4"
+                                                Height="72">
+                                            <TextBlock Text="B列"
+                                                       Foreground="#777"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"/>
+                                        </Border>
+
+                                        <Border Background="#111"
+                                                CornerRadius="4"
+                                                Height="72">
+                                            <TextBlock Text="P列"
+                                                       Foreground="#777"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"/>
+                                        </Border>
+
+                                        <Border Background="#111"
+                                                CornerRadius="4"
+                                                Height="72">
+                                            <TextBlock Text="Diff"
+                                                       Foreground="#FF5C5C"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"/>
+                                        </Border>
+
+                                    </UniformGrid>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Border>
+
+            <!-- ========== 右侧：差异大图查看区 ========== -->
+            <Grid Grid.Column="1"
+                  RowDefinitions="Auto,*">
+
+                <!-- 查看模式切换 -->
+                <Border
+                    Background="#252525"
+                    Padding="8"
+                    BorderBrush="#333"
+                    BorderThickness="0,0,0,1">
+
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <ToggleButton Content="并排"/>
+                        <ToggleButton Content="叠加"/>
+                        <ToggleButton Content="差异"/>
+                        <ToggleButton Content="遮罩"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- 图像显示区 -->
+                <Border
+                    Grid.Row="1"
+                    Background="#181818"
+                    Padding="12">
+
+                    <ScrollViewer>
+                        <Canvas Width="800"
+                                Height="600"
+                                Background="#111">
+
+                            <!-- 示例占位 -->
+                            <TextBlock Text="这里显示大图 / 差异图"
+                                       Foreground="#555"
+                                       FontSize="16"
+                                       Canvas.Left="260"
+                                       Canvas.Top="280"/>
+                        </Canvas>
+                    </ScrollViewer>
+                </Border>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>
+
+
+⸻
+
+三、这个 UI 已经帮你解决了什么问题？
+
+✅ 一个文档、多行图片对比的“正确结构”
+✅ 左侧支持 N 行结果无限滚动（后续可虚拟化）
+✅ 每一行天然就是：B列 → P列 → Diff
+✅ 右侧始终只关注 当前选中行
+✅ 非分页，专业工具体验
+✅ 非 Demo 风格，是真正“工程工具感”
+
+⸻
+
+四、下一步（非常自然的落地路径）
+
+你接下来可以 逐步替换占位内容：
+
+1️⃣ 把 TextBlock 换成 Image（绑定 Bitmap）
+2️⃣ 给 ListBox 绑定 ObservableCollection<RowCompareViewModel>
+3️⃣ Canvas 上画差异 Rectangle（红框）
+4️⃣ 加缩放（ScaleTransform）+ 拖拽
+
+⸻
+
+五、我可以继续直接帮你做的（推荐顺序）
+
+👉 下一步强烈建议：
+	•	「右侧 ImageCompareViewer 控件（支持缩放 + 红框）」」
+	•	或 「左侧 ListBox 完整 MVVM 绑定版本」
+
+你只需要一句话：
+👉 「下一步帮我做 XXX」
+
+我会继续 在这个 UI 基础上往“可交付产品”推进，不会推翻你现在的结构。
