@@ -1,4 +1,89 @@
 
+
+
+
+using Microsoft.Office.Interop.Excel;
+using System.Runtime.InteropServices;
+
+namespace PixelCompareSuite.Services;
+
+public static class ExcelImageExtractor
+{
+    public static List<(int row, int col, byte[] imageBytes)> ExtractImages(
+        string filePath,
+        string sheetName)
+    {
+        var results = new List<(int, int, byte[])>();
+
+        Application excelApp = null!;
+        Workbook workbook = null!;
+        Worksheet worksheet = null!;
+
+        try
+        {
+            excelApp = new Application
+            {
+                Visible = false,
+                DisplayAlerts = false
+            };
+
+            workbook = excelApp.Workbooks.Open(filePath, ReadOnly: true);
+            worksheet = workbook.Worksheets[sheetName];
+
+            foreach (Shape shape in worksheet.Shapes)
+            {
+                // ⭐ 核心判断：是否为图片（不使用 Office.Core）
+                if (shape.Fill.Type != XlFillType.xlFillPicture)
+                    continue;
+
+                Range cell = shape.TopLeftCell;
+
+                string tempFile = Path.Combine(
+                    Path.GetTempPath(),
+                    Guid.NewGuid() + ".png"
+                );
+
+                // 导出图片（Excel 原生能力）
+                shape.Export(
+                    tempFile,
+                    XlPictureAppearance.xlScreen,
+                    XlCopyPictureFormat.xlBitmap
+                );
+
+                byte[] bytes = File.ReadAllBytes(tempFile);
+                File.Delete(tempFile);
+
+                results.Add((cell.Row, cell.Column, bytes));
+
+                Marshal.ReleaseComObject(cell);
+            }
+
+            return results;
+        }
+        finally
+        {
+            if (worksheet != null) Marshal.ReleaseComObject(worksheet);
+            if (workbook != null)
+            {
+                workbook.Close(false);
+                Marshal.ReleaseComObject(workbook);
+            }
+            if (excelApp != null)
+            {
+                excelApp.Quit();
+                Marshal.ReleaseComObject(excelApp);
+            }
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+    }
+}
+
+
+
+
+
 下面我给你 完整、可直接创建工程的整合版方案，按你目前的技术栈和约束来：
 	•	✅ .NET 9
 	•	✅ Avalonia 最新稳定版
