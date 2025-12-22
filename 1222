@@ -1,0 +1,150 @@
+private async Task LoadDataAsync()
+{
+    if (string.IsNullOrEmpty(FilePath) || !File.Exists(FilePath))
+    {
+        StatusMessage = "文件不存在";
+        return;
+    }
+
+    if (string.IsNullOrEmpty(SelectedSheet))
+    {
+        StatusMessage = "请选择 Sheet 页";
+        return;
+    }
+
+    IsProcessing = true;
+    StatusMessage = "正在加载数据...";
+    Progress = 0;
+
+    try
+    {
+        CompareItems.Clear();
+        SelectedItem = null;
+
+        await Task.Run(() =>
+        {
+            Excel.Application? excelApp = null;
+            Excel.Workbook? workbook = null;
+            Excel.Worksheet? worksheet = null;
+            try
+            {
+                excelApp = new Excel.Application
+                {
+                    Visible = false,
+                    DisplayAlerts = false
+                };
+
+                workbook = excelApp.Workbooks.Open(FilePath, ReadOnly: true);
+
+                worksheet = workbook.Worksheets
+                    .Cast<Excel.Worksheet>()
+                    .FirstOrDefault(s => s.Name == SelectedSheet);
+
+                if (worksheet == null)
+                {
+                    Dispatcher.UIThread.Post(() =>
+                        StatusMessage = $"Sheet '{SelectedSheet}' 不存在");
+                    return;
+                }
+
+                int col1 = GetColumnIndex(Column1);
+                int col2 = GetColumnIndex(Column2);
+
+                // 按行收集图片
+                var rowImages = new Dictionary<int, Dictionary<int, string>>();
+
+                foreach (Excel.Shape shape in worksheet.Shapes)
+                {
+                    try
+                    {
+                        if (shape.Type != Microsoft.Office.Core.MsoShapeType.msoPicture &&
+                            shape.Type != Microsoft.Office.Core.MsoShapeType.msoLinkedPicture)
+                            continue;
+
+                        int row = shape.TopLeftCell.Row;
+                        int col = shape.TopLeftCell.Column;
+
+                        if (col != col1 && col != col2)
+                            continue;
+
+                        // 导出图片到临时文件
+                        string tempPath = Path.Combine(
+                            Path.GetTempPath(),
+                            $"excel_img_{Guid.NewGuid():N}.png");
+
+                        shape.Export(tempPath, Excel.XlPictureAppearance.xlScreen,
+                                     Excel.XlPictureFormat.xlPicture);
+
+                        if (!rowImages.TryGetValue(row, out var cols))
+                        {
+                            cols = new Dictionary<int, string>();
+                            rowImages[row] = cols;
+                        }
+
+                        cols[col] = tempPath;
+                    }
+                    finally
+                    {
+                        Marshal.ReleaseComObject(shape);
+                    }
+                }
+
+                var items = new List<CompareItemViewModel>();
+
+                // 只保留两列都存在的行
+                foreach (var kv in rowImages.OrderBy(k => k.Key))
+                {
+                    var cols = kv.Value;
+                    if (cols.ContainsKey(col1) && cols.ContainsKey(col2))
+                    {
+                        items.Add(new CompareItemViewModel
+                        {
+                            RowIndex = kv.Key,
+                            Image1Path = cols[col1],
+                            Image2Path = cols[col2]
+                        });
+                    }
+                }
+
+                Dispatcher.UIThread.Post(() =>
+                {
+                    foreach (var item in items)
+                        CompareItems.Add(item);
+
+                    TotalItems = CompareItems.Count;
+                    CurrentPage = 1;
+                    UpdateCurrentPageItems();
+                    StatusMessage = $"已加载 {TotalItems} 个对比项";
+                    Progress = 50;
+                });
+            }
+            finally
+            {
+                if (workbook != null)
+                {
+                    workbook.Close(false);
+                    Marshal.ReleaseComObject(workbook);
+                }
+                if (excelApp != null)
+                {
+                    excelApp.Quit();
+                    Marshal.ReleaseComObject(excelApp);
+                }
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+        });
+
+        StatusMessage = $"已加载 {TotalItems} 个对比项，点击列表项查看对比结果";
+        Progress = 100;
+    }
+    catch (Exception ex)
+    {
+        StatusMessage = $"加载失败: {ex.Message}";
+        Progress = 0;
+    }
+    finally
+    {
+        IsProcessing = false;
+    }
+}
