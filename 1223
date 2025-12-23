@@ -1,0 +1,129 @@
+<!-- 右侧：像素差异查看区 -->
+<Grid Grid.Column="1" Background="White">
+    <Grid.RowDefinitions>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="*"/>
+    </Grid.RowDefinitions>
+
+    <!-- 差异查看区标题 -->
+    <Border Grid.Row="0" Padding="15" BorderBrush="#90CAF9" BorderThickness="0,0,0,2">
+        <Border.Background>
+            <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                <GradientStop Color="#E3F2FD" Offset="0"/>
+                <GradientStop Color="#BBDEFB" Offset="1"/>
+            </LinearGradientBrush>
+        </Border.Background>
+        <Grid RowDefinitions="Auto,Auto">
+            <TextBlock Grid.Row="0"
+                       FontWeight="Bold"
+                       FontSize="14"
+                       Text="{Binding SelectedItem.RowIndex, StringFormat=像素差异查看 - 行 {0}, FallbackValue=未选择}"/>
+            <TextBlock Grid.Row="1"
+                       FontSize="12"
+                       Foreground="#C62828"
+                       FontWeight="SemiBold"
+                       Margin="0,5,0,0"
+                       IsVisible="{Binding SelectedItem.IsSizeMismatch}"
+                       Text="{Binding SelectedItem.SizeInfo, StringFormat=⚠ 图片尺寸不一致: {0}, FallbackValue=''}"/>
+        </Grid>
+    </Border>
+
+    <!-- 差异图片显示区 -->
+    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="20" HorizontalAlignment="Stretch" VerticalAlignment="Top" IsVisible="{Binding SelectedItem, Converter={StaticResource IsNotNullConverter}}">
+        <!-- 图片1 -->
+        <Border BorderBrush="#E0E0E0" BorderThickness="1" Background="#FAFAFA" Margin="0,0,10,0">
+            <StackPanel>
+                <TextBlock Text="原图1" Padding="10" Background="#F5F5F5" HorizontalAlignment="Stretch" TextAlignment="Center"/>
+                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" Width="400" Height="400">
+                    <Grid>
+                        <Image Source="{Binding SelectedItem.Image1Bitmap}" Stretch="None" HorizontalAlignment="Left" VerticalAlignment="Top"/>
+                        <TextBlock Text="图片加载中..."
+                                   IsVisible="{Binding SelectedItem.IsLoading}"
+                                   VerticalAlignment="Center"
+                                   HorizontalAlignment="Center"
+                                   Foreground="#999"/>
+                        <TextBlock Text="{Binding SelectedItem.Image1Path, StringFormat=路径: {0}}"
+                                   IsVisible="{Binding SelectedItem.Image1Bitmap, Converter={StaticResource IsNullConverter}}"
+                                   VerticalAlignment="Center"
+                                   HorizontalAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   TextAlignment="Center"
+                                   Foreground="#999"
+                                   Margin="10"/>
+                    </Grid>
+                </ScrollViewer>
+            </StackPanel>
+        </Border>
+
+        <!-- 图片2 -->
+        <Border BorderBrush="#E0E0E0" BorderThickness="1" Background="#FAFAFA" Margin="0,0,10,0">
+            <StackPanel>
+                <TextBlock Text="原图2" Padding="10" Background="#F5F5F5" HorizontalAlignment="Stretch" TextAlignment="Center"/>
+                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" Width="400" Height="400">
+                    <Grid>
+                        <Image Source="{Binding SelectedItem.Image2Bitmap}" Stretch="None" HorizontalAlignment="Left" VerticalAlignment="Top"/>
+                        <TextBlock Text="图片加载中..."
+                                   IsVisible="{Binding SelectedItem.IsLoading}"
+                                   VerticalAlignment="Center"
+                                   HorizontalAlignment="Center"
+                                   Foreground="#999"/>
+                        <TextBlock Text="{Binding SelectedItem.Image2Path, StringFormat=路径: {0}}"
+                                   IsVisible="{Binding SelectedItem.Image2Bitmap, Converter={StaticResource IsNullConverter}}"
+                                   VerticalAlignment="Center"
+                                   HorizontalAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   TextAlignment="Center"
+                                   Foreground="#999"
+                                   Margin="10"/>
+                    </Grid>
+                </ScrollViewer>
+            </StackPanel>
+        </Border>
+
+        <!-- 差异图 -->
+        <Border BorderBrush="#E0E0E0" BorderThickness="1" Background="#FAFAFA">
+            <StackPanel>
+                <Grid Background="#F5F5F5" Padding="10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="差异图" HorizontalAlignment="Center" TextAlignment="Center"/>
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding SelectedItem.DifferencePercentageText, StringFormat=差异度: {0}}"
+                               FontWeight="Bold"
+                               Foreground="#D32F2F"
+                               FontSize="14"
+                               Margin="10,0,0,0"/>
+                </Grid>
+                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" Width="400" Height="400">
+                    <Grid>
+                        <Image Source="{Binding SelectedItem.DifferenceBitmap}" Stretch="None" HorizontalAlignment="Left" VerticalAlignment="Top"/>
+                        <TextBlock Text="正在生成差异图..."
+                                   IsVisible="{Binding SelectedItem.IsLoading}"
+                                   VerticalAlignment="Center"
+                                   HorizontalAlignment="Center"
+                                   Foreground="#999"/>
+                        <TextBlock Text="点击列表项开始对比"
+                                   IsVisible="{Binding SelectedItem.DifferenceBitmap, Converter={StaticResource IsNullConverter}}"
+                                   VerticalAlignment="Center"
+                                   HorizontalAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   TextAlignment="Center"
+                                   Foreground="#999"
+                                   Margin="10"/>
+                    </Grid>
+                </ScrollViewer>
+            </StackPanel>
+        </Border>
+    </StackPanel>
+
+    <!-- 未选择提示 -->
+    <TextBlock Grid.Row="1"
+               Text="请从左侧列表选择一个对比项"
+               VerticalAlignment="Center"
+               HorizontalAlignment="Center"
+               FontSize="16"
+               Foreground="#999"
+               IsVisible="{Binding SelectedItem, Converter={StaticResource IsNullConverter}}"/>
+</Grid>
