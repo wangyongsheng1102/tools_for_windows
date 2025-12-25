@@ -1,0 +1,77 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Width="1000"
+        Height="700"
+        Title="Excel 批量格式化工具">
+
+    <DockPanel>
+
+        <!-- 顶部菜单 -->
+        <Menu DockPanel.Dock="Top">
+            <MenuItem Header="文件"/>
+            <MenuItem Header="规则"/>
+            <MenuItem Header="模板"/>
+            <MenuItem Header="帮助"/>
+        </Menu>
+
+        <!-- 底部状态栏 -->
+        <Border DockPanel.Dock="Bottom" Padding="8" Background="#EEE">
+            <TextBlock Text="状态：空闲 | 已选择 0 个文件"/>
+        </Border>
+
+        <!-- 执行按钮 -->
+        <Border DockPanel.Dock="Bottom" Padding="10">
+            <Button Content="▶ 开始批量格式化"
+                    HorizontalAlignment="Right"
+                    Width="180"
+                    Height="36"/>
+        </Border>
+
+        <!-- 文件列表 -->
+        <Border DockPanel.Dock="Bottom" Padding="10">
+            <StackPanel>
+                <TextBlock Text="输入文件" FontWeight="Bold"/>
+                <ListBox Height="120">
+                    <ListBoxItem Content="file1.xlsx"/>
+                    <ListBoxItem Content="file2.xlsx"/>
+                </ListBox>
+            </StackPanel>
+        </Border>
+
+        <!-- 主区域 -->
+        <Grid ColumnDefinitions="220,*">
+
+            <!-- 左侧规则分类 -->
+            <Border BorderBrush="#CCC" BorderThickness="0,0,1,0">
+                <ListBox>
+                    <ListBoxItem Content="基础规则"/>
+                    <ListBoxItem Content="打印规则"/>
+                    <ListBoxItem Content="Sheet 规则"/>
+                    <ListBoxItem Content="清理规则"/>
+                    <ListBoxItem Content="高级（预留）"/>
+                </ListBox>
+            </Border>
+
+            <!-- 右侧规则配置区 -->
+            <ScrollViewer Grid.Column="1">
+                <StackPanel Margin="16" Spacing="10">
+
+                    <TextBlock Text="基础规则"
+                               FontSize="18"
+                               FontWeight="Bold"/>
+
+                    <CheckBox Content="解开所有筛选"/>
+                    <CheckBox Content="解开隐藏列"/>
+                    <CheckBox Content="所有 Sheet 默认选中 A1"/>
+                    <CheckBox Content="仅处理第一个 Sheet"/>
+
+                </StackPanel>
+            </ScrollViewer>
+
+        </Grid>
+
+    </DockPanel>
+</Window>
