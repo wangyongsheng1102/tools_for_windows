@@ -1,3 +1,14 @@
+0>MainWindow.axaml(26,18): Error AVLN3000 : Unable to find suitable setter or adder for property Items of type Avalonia.Controls:Avalonia.Controls.ItemsControl for argument Avalonia.Markup.Xaml:Avalonia.Markup.Xaml.MarkupExtensions.CompiledBindingExtension, available setter parameter lists are:
+System.Object
+System.Object Line 26, position 18.
+0>MainWindow.axaml(26,42): Error AVLN2100 : Cannot parse a compiled binding without an explicit x:DataType directive to give a starting data type for bindings. Line 26, position 42.
+0>MainWindow.axaml(29,32): Error AVLN2000 : Unable to resolve property or method of name 'Name' on type 'XamlX.TypeSystem.XamlPseudoType'. Line 29, position 32.
+0>MainWindow.axaml(35,41): Error AVLN2100 : Cannot parse a compiled binding without an explicit x:DataType directive to give a starting data type for bindings. Line 35, position 41.
+
+
+
+
+
 明白，我们把上一个纯 MVVM 的示例 改进成完整、可编译、可运行版本，带有以下改进：
 	•	左侧 ListBox 选中高亮
 	•	右侧 ContentControl 自动刷新显示
