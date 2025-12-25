@@ -1,6 +1,43 @@
 
 
 
+
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:ExcelFormatterSuite.ViewModels">
+
+    <!-- 基础规则 -->
+    <DataTemplate DataType="{x:Type vm:BasicRulesViewModel}">
+        <StackPanel Margin="16" Spacing="10">
+            <CheckBox Content="解除筛选"
+                      IsChecked="{Binding UnlockFilter}" />
+            <CheckBox Content="解除隐藏列"
+                      IsChecked="{Binding UnlockHiddenColumns}" />
+            <CheckBox Content="默认选中 A1"
+                      IsChecked="{Binding SelectCellA1}" />
+        </StackPanel>
+    </DataTemplate>
+
+    <!-- 打印规则 -->
+    <DataTemplate DataType="{x:Type vm:PrintRulesViewModel}">
+        <StackPanel Margin="16" Spacing="10">
+            <CheckBox Content="启用打印设置"
+                      IsChecked="{Binding IsEnabled}" />
+
+            <StackPanel Orientation="Horizontal" Spacing="5">
+                <TextBlock Text="缩放比例："
+                           VerticalAlignment="Center" />
+                <NumericUpDown Minimum="10"
+                               Maximum="200"
+                               Width="80"
+                               Value="{Binding Scale}" />
+            </StackPanel>
+        </StackPanel>
+    </DataTemplate>
+
+</Styles>
+
+
 from datetime import datetime, timedelta
 
 # 假设 T_ 表有一个日期列，这里默认是 CREATE_DATE
