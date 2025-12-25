@@ -1,3 +1,11 @@
+Unhandled exception. Avalonia.Markup.Xaml.XamlLoadException: No precompiled XAML found for ExcelFormatterSuite.App, make sure to specify x:Class and include your XAML file as AvaloniaResource
+   at Avalonia.Markup.Xaml.AvaloniaXamlLoader.Load(Object obj)
+   at ExcelFormatterSuite.App.Initialize() in D:\dotnet_2025\ExcelFormatterSuite\App.axaml.cs:line 15
+   at Avalonia.AppBuilder.SetupUnsafe()
+   at Avalonia.AppBuilder.Setup()
+   at Avalonia.AppBuilder.SetupWithLifetime(IApplicationLifetime lifetime)
+   at Avalonia.ClassicDesktopStyleApplicationLifetimeExtensions.StartWithClassicDesktopLifetime(AppBuilder builder, String[] args, Action`1 lifetimeBuilder)
+   at ExcelFormatterSuite.Program.Main(String[] args) in D:\dotnet_2025\ExcelFormatterSuite\Program.cs:line 12
 
 
 
