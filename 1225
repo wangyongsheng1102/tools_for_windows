@@ -1,4 +1,50 @@
 
+
+
+from datetime import datetime, timedelta
+
+# 假设 T_ 表有一个日期列，这里默认是 CREATE_DATE
+DATE_COLUMN = 'CREATE_DATE'
+
+# 输入表名列表文件，每行一个表名
+TABLE_LIST_FILE = 'tablelist.txt'
+
+# 输出 SQL 文件
+OUTPUT_SQL_FILE = 'delete_statements_oracle.txt'
+
+def main():
+    # 计算两年前的日期
+    two_years_ago = datetime.now() - timedelta(days=365*2)
+    two_years_ago_str = two_years_ago.strftime('%Y-%m-%d')
+
+    # 读取表名列表
+    with open(TABLE_LIST_FILE, 'r') as f:
+        tables = [line.strip() for line in f if line.strip()]
+
+    sql_statements = []
+
+    for table in tables:
+        if table.startswith('W_') or table.startswith('H_'):
+            # W_/H_ 表直接 TRUNCATE
+            sql = f"TRUNCATE TABLE {table};"
+            sql_statements.append(sql)
+        elif table.startswith('T_'):
+            # T_ 表保留最近两年数据，使用 TRUNC 去掉时分秒
+            sql = f"DELETE FROM {table} WHERE {DATE_COLUMN} < TRUNC(TO_DATE('{two_years_ago_str}', 'YYYY-MM-DD'));"
+            sql_statements.append(sql)
+
+    # 写入文件
+    with open(OUTPUT_SQL_FILE, 'w') as f:
+        for sql in sql_statements:
+            f.write(sql + '\n')
+
+    print(f"生成 SQL 成功，共 {len(sql_statements)} 条语句，保存到 {OUTPUT_SQL_FILE}")
+
+if __name__ == '__main__':
+    main()
+
+
+
 好的，我帮你生成一个完整 Avalonia 11 + INotifyPropertyChanged + ICommand + Interop.Excel 的批量 Excel 格式化工具示例，包含：
 	•	左侧规则分类导航
 	•	右侧规则配置区
