@@ -1,3 +1,229 @@
+
+
+明白了，你想要一个 最小可运行的 Avalonia 示例，左侧是一个列表，右侧根据左侧选中项显示对应的 View，保持逻辑清晰，没有其他功能。下面我给你一个完整示例，使用 MVVM + ReactiveUI，结构清楚：
+
+⸻
+
+1. 项目结构
+
+AvaloniaMinimalExample/
+├─ AvaloniaMinimalExample.csproj
+├─ App.axaml
+├─ App.axaml.cs
+├─ MainWindow.axaml
+├─ MainWindow.axaml.cs
+├─ ViewModels/
+│   ├─ MainWindowViewModel.cs
+│   ├─ ItemViewModel.cs
+├─ Views/
+    ├─ ItemAView.axaml
+    ├─ ItemAView.axaml.cs
+    ├─ ItemBView.axaml
+    ├─ ItemBView.axaml.cs
+
+
+⸻
+
+2. App.axaml
+
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="AvaloniaMinimalExample.App">
+  <Application.Styles>
+    <FluentTheme Mode="Light"/>
+  </Application.Styles>
+</Application>
+
+
+⸻
+
+3. App.axaml.cs
+
+using Avalonia;
+using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Markup.Xaml;
+
+namespace AvaloniaMinimalExample
+{
+    public partial class App : Application
+    {
+        public override void Initialize()
+        {
+            AvaloniaXamlLoader.Load(this);
+        }
+
+        public override void OnFrameworkInitializationCompleted()
+        {
+            if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+            {
+                desktop.MainWindow = new MainWindow
+                {
+                    DataContext = new ViewModels.MainWindowViewModel()
+                };
+            }
+
+            base.OnFrameworkInitializationCompleted();
+        }
+    }
+}
+
+
+⸻
+
+4. MainWindow.axaml
+
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:AvaloniaMinimalExample.ViewModels"
+        xmlns:views="clr-namespace:AvaloniaMinimalExample.Views"
+        x:Class="AvaloniaMinimalExample.MainWindow"
+        Title="Minimal Example" Width="600" Height="400">
+
+  <Grid ColumnDefinitions="150,*">
+    <!-- 左侧列表 -->
+    <ListBox Items="{Binding Items}" SelectedItem="{Binding SelectedItem}">
+      <ListBox.ItemTemplate>
+        <DataTemplate>
+          <TextBlock Text="{Binding Name}"/>
+        </DataTemplate>
+      </ListBox.ItemTemplate>
+    </ListBox>
+
+    <!-- 右侧视图 -->
+    <ContentControl Grid.Column="1" Content="{Binding SelectedItem.View}"/>
+  </Grid>
+</Window>
+
+
+⸻
+
+5. MainWindowViewModel.cs
+
+using Avalonia.Controls;
+using ReactiveUI;
+using System.Collections.ObjectModel;
+
+namespace AvaloniaMinimalExample.ViewModels
+{
+    public class MainWindowViewModel : ReactiveObject
+    {
+        public ObservableCollection<ItemViewModel> Items { get; } = new ObservableCollection<ItemViewModel>();
+
+        private ItemViewModel? _selectedItem;
+        public ItemViewModel? SelectedItem
+        {
+            get => _selectedItem;
+            set => this.RaiseAndSetIfChanged(ref _selectedItem, value);
+        }
+
+        public MainWindowViewModel()
+        {
+            // 初始化两个示例项目
+            Items.Add(new ItemViewModel("Item A", new Views.ItemAView()));
+            Items.Add(new ItemViewModel("Item B", new Views.ItemBView()));
+
+            SelectedItem = Items[0];
+        }
+    }
+}
+
+
+⸻
+
+6. ItemViewModel.cs
+
+using Avalonia.Controls;
+
+namespace AvaloniaMinimalExample.ViewModels
+{
+    public class ItemViewModel
+    {
+        public string Name { get; }
+        public UserControl View { get; }
+
+        public ItemViewModel(string name, UserControl view)
+        {
+            Name = name;
+            View = view;
+        }
+    }
+}
+
+
+⸻
+
+7. ItemAView.axaml
+
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="AvaloniaMinimalExample.Views.ItemAView">
+  <Grid Background="LightBlue">
+    <TextBlock Text="This is Item A view" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+  </Grid>
+</UserControl>
+
+8. ItemAView.axaml.cs
+
+using Avalonia.Controls;
+using Avalonia.Markup.Xaml;
+
+namespace AvaloniaMinimalExample.Views
+{
+    public partial class ItemAView : UserControl
+    {
+        public ItemAView()
+        {
+            AvaloniaXamlLoader.Load(this);
+        }
+    }
+}
+
+
+⸻
+
+9. ItemBView.axaml
+
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="AvaloniaMinimalExample.Views.ItemBView">
+  <Grid Background="LightGreen">
+    <TextBlock Text="This is Item B view" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+  </Grid>
+</UserControl>
+
+10. ItemBView.axaml.cs
+
+using Avalonia.Controls;
+using Avalonia.Markup.Xaml;
+
+namespace AvaloniaMinimalExample.Views
+{
+    public partial class ItemBView : UserControl
+    {
+        public ItemBView()
+        {
+            AvaloniaXamlLoader.Load(this);
+        }
+    }
+}
+
+
+⸻
+
+✅ 逻辑说明：
+	1.	左侧 ListBox 绑定 Items，选择时通过 SelectedItem 更新。
+	2.	SelectedItem.View 对应右侧 ContentControl 的内容。
+	3.	每个 ItemViewModel 都包含名字和对应的 View。
+	4.	仅最小功能，逻辑清晰，可扩展。
+
+⸻
+
+我可以帮你 改成纯 MVVM + DataTemplate 不直接存 View 的版本，这样更符合 MVVM 最佳实践，同时右侧内容可自动切换 ViewModel → View。
+
+你希望我也给出那个版本吗？
+
+
+
 Unhandled exception. Avalonia.Markup.Xaml.XamlLoadException: No precompiled XAML found for ExcelFormatterSuite.App, make sure to specify x:Class and include your XAML file as AvaloniaResource
    at Avalonia.Markup.Xaml.AvaloniaXamlLoader.Load(Object obj)
    at ExcelFormatterSuite.App.Initialize() in D:\dotnet_2025\ExcelFormatterSuite\App.axaml.cs:line 15
