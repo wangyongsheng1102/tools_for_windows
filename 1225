@@ -1,3 +1,370 @@
+
+好，我来帮你生成一个完整 Avalonia + MVVM + Interop.Excel 批量处理工具示例，完全可运行骨架，按你的需求设计：
+	•	左侧规则导航
+	•	右侧规则配置区
+	•	文件选择区 + 执行按钮
+	•	状态栏 + 日志显示
+	•	批量执行 Excel Interop 规则
+
+⸻
+
+一、项目结构（参考）
+
+ExcelBatchTool/
+│
+├─ ViewModels/
+│   ├─ MainViewModel.cs
+│   ├─ RuleBaseViewModel.cs
+│   ├─ BasicRulesViewModel.cs
+│   ├─ PrintRulesViewModel.cs
+│
+├─ Models/
+│   ├─ ExcelRule.cs
+│   ├─ UnlockFilterRule.cs
+│   ├─ UnlockHiddenColumnsRule.cs
+│   ├─ PrintScaleRule.cs
+│   └─ ExcelInteropHelper.cs
+│
+├─ Views/
+│   ├─ MainWindow.axaml
+│   └─ DataTemplates.axaml
+│
+├─ App.axaml
+└─ Program.cs
+
+
+⸻
+
+二、MainWindow.axaml
+
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="clr-namespace:ExcelBatchTool.ViewModels"
+        mc:Ignorable="d"
+        x:Class="ExcelBatchTool.Views.MainWindow"
+        Width="1000" Height="700"
+        Title="Excel 批量格式化工具">
+
+    <Window.DataContext>
+        <vm:MainViewModel/>
+    </Window.DataContext>
+
+    <DockPanel>
+
+        <!-- 顶部菜单 -->
+        <Menu DockPanel.Dock="Top">
+            <MenuItem Header="文件"/>
+            <MenuItem Header="规则"/>
+            <MenuItem Header="模板"/>
+            <MenuItem Header="帮助"/>
+        </Menu>
+
+        <!-- 底部状态栏 -->
+        <Border DockPanel.Dock="Bottom" Padding="8" Background="#EEE">
+            <TextBlock Text="{Binding StatusText}"/>
+        </Border>
+
+        <!-- 执行按钮 -->
+        <Border DockPanel.Dock="Bottom" Padding="10">
+            <Button Content="▶ 开始批量格式化"
+                    HorizontalAlignment="Right"
+                    Width="180"
+                    Height="36"
+                    Command="{Binding ExecuteCommand}"/>
+        </Border>
+
+        <!-- 文件列表 -->
+        <Border DockPanel.Dock="Bottom" Padding="10">
+            <StackPanel>
+                <TextBlock Text="输入文件" FontWeight="Bold"/>
+                <ListBox Height="120" Items="{Binding SelectedFiles}"/>
+                <Button Content="选择文件" Command="{Binding SelectFilesCommand}" Width="120"/>
+            </StackPanel>
+        </Border>
+
+        <!-- 主区域 -->
+        <Grid ColumnDefinitions="220,*">
+
+            <!-- 左侧规则分类 -->
+            <Border BorderBrush="#CCC" BorderThickness="0,0,1,0">
+                <ListBox Items="{Binding Categories}"
+                         SelectedItem="{Binding CurrentCategory}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Name}"/>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Border>
+
+            <!-- 右侧规则配置区 -->
+            <ScrollViewer Grid.Column="1">
+                <ContentControl Content="{Binding CurrentRule}"/>
+            </ScrollViewer>
+
+        </Grid>
+
+    </DockPanel>
+</Window>
+
+
+⸻
+
+三、DataTemplates.axaml（规则 UI）
+
+<DataTemplates xmlns="https://github.com/avaloniaui"
+               xmlns:vm="clr-namespace:ExcelBatchTool.ViewModels"
+               xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- 基础规则 -->
+    <DataTemplate DataType="{x:Type vm:BasicRulesViewModel}">
+        <StackPanel Margin="16" Spacing="10">
+            <CheckBox Content="解开所有筛选" IsChecked="{Binding UnlockFilter}"/>
+            <CheckBox Content="解开隐藏列" IsChecked="{Binding UnlockHiddenColumns}"/>
+            <CheckBox Content="默认选择 A1" IsChecked="{Binding SelectCellA1}"/>
+        </StackPanel>
+    </DataTemplate>
+
+    <!-- 打印规则 -->
+    <DataTemplate DataType="{x:Type vm:PrintRulesViewModel}">
+        <StackPanel Margin="16" Spacing="10">
+            <CheckBox Content="启用打印规则" IsChecked="{Binding IsEnabled}"/>
+            <StackPanel Orientation="Horizontal" Spacing="5">
+                <TextBlock Text="缩放比例:" VerticalAlignment="Center"/>
+                <NumericUpDown Minimum="10" Maximum="200" Value="{Binding Scale}" Width="80"/>
+            </StackPanel>
+        </StackPanel>
+    </DataTemplate>
+
+</DataTemplates>
+
+
+⸻
+
+四、规则 ViewModel 示例
+
+// RuleBaseViewModel.cs
+public abstract class RuleBaseViewModel : ViewModelBase
+{
+    private bool _isEnabled = true;
+    public bool IsEnabled { get => _isEnabled; set => this.RaiseAndSetIfChanged(ref _isEnabled, value); }
+}
+
+// BasicRulesViewModel.cs
+public class BasicRulesViewModel : RuleBaseViewModel
+{
+    private bool _unlockFilter;
+    public bool UnlockFilter { get => _unlockFilter; set => this.RaiseAndSetIfChanged(ref _unlockFilter, value); }
+
+    private bool _unlockHiddenColumns;
+    public bool UnlockHiddenColumns { get => _unlockHiddenColumns; set => this.RaiseAndSetIfChanged(ref _unlockHiddenColumns, value); }
+
+    private bool _selectCellA1;
+    public bool SelectCellA1 { get => _selectCellA1; set => this.RaiseAndSetIfChanged(ref _selectCellA1, value); }
+}
+
+// PrintRulesViewModel.cs
+public class PrintRulesViewModel : RuleBaseViewModel
+{
+    private int _scale = 100;
+    public int Scale { get => _scale; set => this.RaiseAndSetIfChanged(ref _scale, value); }
+}
+
+
+⸻
+
+五、ExcelRule 抽象与示例（Interop）
+
+// ExcelRule.cs
+using Excel = Microsoft.Office.Interop.Excel;
+public abstract class ExcelRule
+{
+    public bool IsEnabled { get; set; } = true;
+    public abstract string Name { get; }
+    public abstract void Apply(Excel.Workbook workbook);
+}
+
+// UnlockFilterRule.cs
+public class UnlockFilterRule : ExcelRule
+{
+    public override string Name => "解开所有筛选";
+    public override void Apply(Excel.Workbook workbook)
+    {
+        foreach (Excel.Worksheet sheet in workbook.Worksheets)
+        {
+            if (sheet.AutoFilter != null)
+                sheet.AutoFilterMode = false;
+        }
+    }
+}
+
+// UnlockHiddenColumnsRule.cs
+public class UnlockHiddenColumnsRule : ExcelRule
+{
+    public override string Name => "解开隐藏列";
+    public override void Apply(Excel.Workbook workbook)
+    {
+        foreach (Excel.Worksheet sheet in workbook.Worksheets)
+        {
+            int lastCol = sheet.Cells.SpecialCells(Excel.XlCellType.xlCellTypeLastCell).Column;
+            for (int i = 1; i <= lastCol; i++)
+                sheet.Columns[i].Hidden = false;
+        }
+    }
+}
+
+// PrintScaleRule.cs
+public class PrintScaleRule : ExcelRule
+{
+    public int Scale { get; set; } = 100;
+    public override string Name => "打印缩放";
+    public override void Apply(Excel.Workbook workbook)
+    {
+        foreach (Excel.Worksheet sheet in workbook.Worksheets)
+            sheet.PageSetup.Zoom = Scale;
+    }
+}
+
+
+⸻
+
+六、批量执行管线（InteropHelper）
+
+using Excel = Microsoft.Office.Interop.Excel;
+using System.Runtime.InteropServices;
+
+public static class ExcelInteropHelper
+{
+    public static void ProcessFiles(IEnumerable<string> filePaths, List<ExcelRule> rules, Action<string, string> logCallback = null)
+    {
+        Excel.Application excelApp = new Excel.Application
+        {
+            Visible = false,
+            DisplayAlerts = false
+        };
+
+        foreach (var file in filePaths)
+        {
+            Excel.Workbook workbook = null;
+            try
+            {
+                workbook = excelApp.Workbooks.Open(file);
+                foreach (var rule in rules)
+                    if (rule.IsEnabled) rule.Apply(workbook);
+                workbook.Save();
+                logCallback?.Invoke(file, "✔ 成功");
+            }
+            catch (Exception ex)
+            {
+                logCallback?.Invoke(file, $"✖ 失败: {ex.Message}");
+            }
+            finally
+            {
+                if (workbook != null)
+                {
+                    workbook.Close(false);
+                    Marshal.ReleaseComObject(workbook);
+                    workbook = null;
+                }
+            }
+        }
+
+        excelApp.Quit();
+        Marshal.ReleaseComObject(excelApp);
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+    }
+}
+
+
+⸻
+
+七、MainViewModel 执行绑定
+
+public class MainViewModel : ViewModelBase
+{
+    public ObservableCollection<RuleCategoryViewModel> Categories { get; }
+    public RuleCategoryViewModel CurrentCategory { get => _currentCategory; set => this.RaiseAndSetIfChanged(ref _currentCategory, value); }
+    private RuleCategoryViewModel _currentCategory;
+
+    public ObservableCollection<string> SelectedFiles { get; } = new();
+    public ObservableCollection<string> LogList { get; } = new();
+    public string StatusText { get => _statusText; set => this.RaiseAndSetIfChanged(ref _statusText, value); }
+    private string _statusText;
+
+    public BasicRulesViewModel BasicRules { get; } = new();
+    public PrintRulesViewModel PrintRules { get; } = new();
+
+    public ReactiveCommand<Unit, Unit> SelectFilesCommand { get; }
+    public ReactiveCommand<Unit, Unit> ExecuteCommand { get; }
+
+    public MainViewModel()
+    {
+        Categories = new ObservableCollection<RuleCategoryViewModel>
+        {
+            new("基础规则", BasicRules),
+            new("打印规则", PrintRules)
+        };
+        CurrentCategory = Categories.First();
+
+        SelectFilesCommand = ReactiveCommand.Create(() =>
+        {
+            // 调用文件选择对话框
+            var dlg = new OpenFileDialog() { AllowMultiple = true, Filters = { new FileDialogFilter() { Name="Excel", Extensions={ "xlsx", "xls" } } } };
+            var files = dlg.ShowAsync(App.Current.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime).Result;
+            if (files != null) foreach (var f in files) SelectedFiles.Add(f);
+        });
+
+        ExecuteCommand = ReactiveCommand.Create(() =>
+        {
+            var rules = new List<ExcelRule>
+            {
+                new UnlockFilterRule { IsEnabled = BasicRules.UnlockFilter },
+                new UnlockHiddenColumnsRule { IsEnabled = BasicRules.UnlockHiddenColumns },
+                new PrintScaleRule { IsEnabled = PrintRules.IsEnabled, Scale = PrintRules.Scale }
+            };
+
+            ExcelInteropHelper.ProcessFiles(SelectedFiles, rules, (file, msg) =>
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    LogList.Add($"{file}: {msg}");
+                    StatusText = $"{LogList.Count}/{SelectedFiles.Count} 文件处理完成";
+                });
+            });
+        });
+    }
+}
+
+
+⸻
+
+✅ 完成效果
+	1.	左侧规则导航
+	2.	右侧规则配置
+	3.	文件选择 + 批量执行按钮
+	4.	状态栏实时显示进度
+	5.	日志列表显示每个文件成功/失败
+	6.	Interop.Excel 批量处理
+
+新规则只需：
+	1.	新建 ExcelRule 类
+	2.	新建对应 RuleViewModel
+	3.	左侧 ListBox 添加
+	4.	DataTemplate 定义
+	5.	完全不用改执行管线
+
+⸻
+
+如果你需要，我可以帮你加上“规则模板导入/导出 JSON”，这样以后客户可以保存不同规则组合，非常适合企业级工具。
+
+你希望我加吗？
+
+
+
+
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
