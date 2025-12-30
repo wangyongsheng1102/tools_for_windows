@@ -2,6 +2,167 @@
 
 
 
+
+
+明白 👍
+我们来精确按你的要求改：
+
+✅ 数字画在矩形外侧
+✅ 不要任何底色
+✅ 只画纯数字
+✅ 不遮挡方框内容
+✅ 自动处理靠近边缘的情况
+
+我下面给你一个干净、工程里可直接替换的版本。
+
+⸻
+
+一、设计规则（先说清楚行为）
+	•	默认位置：矩形「左上角外侧」
+	•	如果左上放不下（越界） → 自动放到：
+	•	右上外侧
+	•	左下外侧
+	•	右下外侧（兜底）
+	•	只画文字，不画背景
+	•	使用 ImageSharp 官方 Text API（不会再手撸像素）
+
+⸻
+
+二、增强后的最终方法（推荐直接用）
+
+using SixLabors.Fonts;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Drawing.Processing;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
+
+private void DrawRectanglesWithIndexOutside(
+    Image<Rgba32> image,
+    List<SixLabors.ImageSharp.Rectangle> rectangles)
+{
+    var redColor = Color.Red;
+    var textColor = Color.Red;
+    int lineWidth = 3;
+
+    Font font = SystemFonts.CreateFont("Arial", 18, FontStyle.Bold);
+
+    image.Mutate(ctx =>
+    {
+        for (int i = 0; i < rectangles.Count; i++)
+        {
+            var rect = rectangles[i];
+
+            // 安全矩形
+            int x = Math.Max(0, rect.X);
+            int y = Math.Max(0, rect.Y);
+            int w = Math.Min(rect.Width, image.Width - x);
+            int h = Math.Min(rect.Height, image.Height - y);
+
+            var safeRect = new Rectangle(x, y, w, h);
+
+            // ===== 1. 画矩形 =====
+            ctx.Draw(redColor, lineWidth, safeRect);
+
+            // ===== 2. 编号 =====
+            string label = (i + 1).ToString();
+
+            var textOptions = new TextOptions(font);
+            var textSize = TextMeasurer.Measure(label, textOptions);
+
+            PointF textPos = GetOutsideTextPosition(
+                safeRect,
+                textSize,
+                image.Width,
+                image.Height
+            );
+
+            ctx.DrawText(label, font, textColor, textPos);
+        }
+    });
+}
+
+
+⸻
+
+三、核心：自动选择“外侧位置”的算法
+
+private PointF GetOutsideTextPosition(
+    Rectangle rect,
+    FontRectangle textSize,
+    int imageWidth,
+    int imageHeight)
+{
+    const float padding = 4f;
+
+    // 4 个候选位置（按优先级）
+    PointF[] candidates =
+    {
+        // 左上
+        new PointF(rect.Left - textSize.Width - padding, rect.Top),
+
+        // 右上
+        new PointF(rect.Right + padding, rect.Top),
+
+        // 左下
+        new PointF(rect.Left - textSize.Width - padding,
+                   rect.Bottom - textSize.Height),
+
+        // 右下（兜底）
+        new PointF(rect.Right + padding,
+                   rect.Bottom - textSize.Height)
+    };
+
+    foreach (var p in candidates)
+    {
+        if (p.X >= 0 &&
+            p.Y >= 0 &&
+            p.X + textSize.Width <= imageWidth &&
+            p.Y + textSize.Height <= imageHeight)
+        {
+            return p;
+        }
+    }
+
+    // 实在放不下 → 强制贴边
+    return new PointF(
+        Math.Clamp(rect.Right + padding, 0, imageWidth - textSize.Width),
+        Math.Clamp(rect.Top, 0, imageHeight - textSize.Height)
+    );
+}
+
+
+⸻
+
+四、最终视觉效果（你会得到）
+
+  1 ┌─────────┐
+    │         │
+    │         │
+    └─────────┘
+
+          ┌─────────┐ 2
+          │         │
+          │         │
+          └─────────┘
+
+	•	数字在框外
+	•	无遮挡
+	•	红框 + 红字，风格统一
+	•	非常适合你的「差异区域编号」
+
+⸻
+
+五、如果你下一步想做的（我很建议）
+
+结合你现在做的 图片像素差异对比工具，下一步通常会是：
+	•	🔹 点击 UI 列表 → 高亮对应编号
+	•	🔹 鼠标 Hover 编号 → 框闪烁
+	•	🔹 导出 HTML / PNG 报告（编号 + 差异图）
+
+如果你愿意，我可以按你现在 Avalonia + ImageSharp 的架构直接帮你补这一步。
+
+
+
 明白了，我们现在要做两件事：
 	1.	在 UserControl（例如 ItemAView）中加入 WSL 启停逻辑
 	2.	输出整个 UI 草图（包含左侧菜单、右侧内容区、ItemAView 的操作按钮等）
