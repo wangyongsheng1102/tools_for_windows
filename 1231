@@ -1,4 +1,157 @@
+明白，我们要在你的 ItemAView + ItemAViewModel 里增加操作 Windows WSL 子系统 的功能，并把返回信息显示在右下角 Log 区。
+我会直接给你 完整实现，保持你现有 MVVM + Avalonia 11 结构。
 
+⸻
+
+一、思路分析
+	1.	ItemAView：新增两个按钮
+	•	检查 WSL 状态
+	•	启动 / 停止 WSL（根据状态切换）
+	2.	ItemAViewModel：
+	•	注入 MainWindowViewModel 的 AddLog() 方法，用于写 Log
+	•	使用 System.Diagnostics.Process 执行 WSL 命令
+	3.	MainWindowViewModel：
+	•	已有 AddLog() 方法，Log 区会自动显示
+	4.	线程安全：
+	•	执行命令使用 Task.Run 防止 UI 阻塞
+
+⸻
+
+二、修改 ViewModel
+
+ItemAViewModel.cs
+
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using ExcelFormatter12.Models;
+using System.Diagnostics;
+using System.Threading.Tasks;
+
+namespace ExcelFormatter12.ViewModels;
+
+public partial class ItemAViewModel : BaseItemViewModel
+{
+    private readonly MainWindowViewModel _mainVm;
+
+    public ItemAViewModel(MainWindowViewModel mainVm) : base("Item A")
+    {
+        _mainVm = mainVm;
+    }
+
+    [RelayCommand]
+    public async Task CheckWslStatus()
+    {
+        await ExecuteWslCommand("wsl --list --verbose");
+    }
+
+    [RelayCommand]
+    public async Task StartWsl(string distroName = "Ubuntu-22.04")
+    {
+        await ExecuteWslCommand($"wsl --distribution {distroName} --user root --exec echo started");
+    }
+
+    [RelayCommand]
+    public async Task StopWsl(string distroName = "Ubuntu-22.04")
+    {
+        await ExecuteWslCommand($"wsl --terminate {distroName}");
+    }
+
+    private async Task ExecuteWslCommand(string command)
+    {
+        await Task.Run(() =>
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("cmd.exe", $"/c {command}")
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                using var process = Process.Start(psi)!;
+                string output = process.StandardOutput.ReadToEnd();
+                string error = process.StandardError.ReadToEnd();
+                process.WaitForExit();
+
+                if (!string.IsNullOrWhiteSpace(output))
+                    _mainVm.AddLog(output, LogLevel.Info);
+                if (!string.IsNullOrWhiteSpace(error))
+                    _mainVm.AddLog(error, LogLevel.Error);
+            }
+            catch (Exception ex)
+            {
+                _mainVm.AddLog(ex.Message, LogLevel.Error);
+            }
+        });
+    }
+}
+
+✅ 注意：这里构造函数需要传入 MainWindowViewModel，用于写 Log。
+
+⸻
+
+修改 MainWindowViewModel.cs
+
+Items.Add(new ItemAViewModel(this)); // 传入 MainWindowViewModel
+Items.Add(new ItemBViewModel());
+Items.Add(new ItemCViewModel());
+
+其他部分保持不变
+
+⸻
+
+三、修改 ItemAView.axaml
+
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:ExcelFormatter12.ViewModels"
+             x:Class="ExcelFormatter12.Views.ItemAView"
+             x:DataType="vm:ItemAViewModel">
+
+    <StackPanel Spacing="10" Padding="10">
+
+        <TextBlock Text="WSL 操作" FontSize="16" FontWeight="Bold"/>
+
+        <Button Content="检查 WSL 状态"
+                Command="{Binding CheckWslStatusCommand}"/>
+
+        <Button Content="启动 WSL"
+                Command="{Binding StartWslCommand}"/>
+
+        <Button Content="停止 WSL"
+                Command="{Binding StopWslCommand}"/>
+
+    </StackPanel>
+</UserControl>
+
+
+⸻
+
+四、效果说明
+	1.	点击 检查 WSL 状态 → 会执行 wsl --list --verbose
+→ 输出显示在 Log 区
+	2.	点击 启动 WSL → 会执行 wsl --distribution Ubuntu-22.04 --user root --exec echo started
+→ 输出显示在 Log 区
+	3.	点击 停止 WSL → 执行 wsl --terminate Ubuntu-22.04
+→ 错误 / 成功信息显示在 Log 区
+	4.	Log 区自动滚动（MainWindow.axaml.cs 里已经实现）
+
+⸻
+
+五、注意事项
+	1.	distroName 可以修改成你本机的 WSL 发行版名
+	2.	异步执行防止 UI 阻塞
+	3.	权限问题：某些 WSL 命令需要管理员权限，如果出现权限错误，会显示在 Log 区
+
+⸻
+
+我可以帮你下一步 增强功能：
+	•	显示 WSL 运行状态（按钮文字动态变“启动/停止”）
+	•	支持多个 WSL 发行版选择
+
+你希望我直接加上吗？
 
 
 明白，我来给你按 方案 2（ViewModel 直接提供 Foreground Brush） 的完整工程代码。
