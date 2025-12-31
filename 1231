@@ -1,3 +1,170 @@
+
+
+明白，我来帮你把 ItemAView + ItemAViewModel 完整改造成可操作 WSL，并且 Log 区输出中文正确显示。保持你现有 Avalonia 11 + MVVM 结构。
+
+⸻
+
+一、ItemAViewModel.cs（完整）
+
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using ExcelFormatter12.Models;
+using System;
+using System.Diagnostics;
+using System.Threading.Tasks;
+
+namespace ExcelFormatter12.ViewModels;
+
+public partial class ItemAViewModel : BaseItemViewModel
+{
+    private readonly MainWindowViewModel _mainVm;
+
+    public ItemAViewModel(MainWindowViewModel mainVm) : base("Item A")
+    {
+        _mainVm = mainVm;
+    }
+
+    [RelayCommand]
+    public async Task CheckWslStatus(string distroName = "Ubuntu-22.04")
+    {
+        await ExecuteWslCommand("wsl --list --verbose");
+    }
+
+    [RelayCommand]
+    public async Task StartWsl(string distroName = "Ubuntu-22.04")
+    {
+        // 只是简单启动，实际可以启动服务或执行命令
+        await ExecuteWslCommand($"wsl --distribution {distroName} --exec echo started");
+    }
+
+    [RelayCommand]
+    public async Task StopWsl(string distroName = "Ubuntu-22.04")
+    {
+        await ExecuteWslCommand($"wsl --terminate {distroName}");
+    }
+
+    private async Task ExecuteWslCommand(string command)
+    {
+        await Task.Run(() =>
+        {
+            try
+            {
+                // 直接调用 wsl.exe，避免 cmd 转码问题
+                var psi = new ProcessStartInfo("wsl.exe", command)
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    StandardOutputEncoding = System.Text.Encoding.UTF8,
+                    StandardErrorEncoding = System.Text.Encoding.UTF8
+                };
+
+                using var process = Process.Start(psi)!;
+                string output = process.StandardOutput.ReadToEnd();
+                string error = process.StandardError.ReadToEnd();
+                process.WaitForExit();
+
+                if (!string.IsNullOrWhiteSpace(output))
+                    _mainVm.AddLog(output.Trim(), LogLevel.Info);
+                if (!string.IsNullOrWhiteSpace(error))
+                    _mainVm.AddLog(error.Trim(), LogLevel.Error);
+            }
+            catch (Exception ex)
+            {
+                _mainVm.AddLog(ex.Message, LogLevel.Error);
+            }
+        });
+    }
+}
+
+✅ 关键点：
+	•	直接调用 wsl.exe 避免 cmd 转码
+	•	设置 StandardOutputEncoding = UTF8
+	•	输出日志到 MainWindowViewModel.AddLog()
+
+⸻
+
+二、ItemAView.axaml（完整）
+
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:ExcelFormatter12.ViewModels"
+             x:Class="ExcelFormatter12.Views.ItemAView"
+             x:DataType="vm:ItemAViewModel">
+
+    <StackPanel Spacing="10" Padding="10">
+        <TextBlock Text="WSL 操作" FontSize="16" FontWeight="Bold"/>
+
+        <Button Content="检查 WSL 状态"
+                Command="{Binding CheckWslStatusCommand}"/>
+
+        <Button Content="启动 WSL"
+                Command="{Binding StartWslCommand}"/>
+
+        <Button Content="停止 WSL"
+                Command="{Binding StopWslCommand}"/>
+    </StackPanel>
+</UserControl>
+
+
+⸻
+
+三、MainWindowViewModel.cs 中 ItemA 初始化
+
+Items.Add(new ItemAViewModel(this)); // 传入 MainWindowViewModel
+Items.Add(new ItemBViewModel());
+Items.Add(new ItemCViewModel());
+
+	•	保证 ItemAViewModel 可以调用 AddLog() 写日志
+
+⸻
+
+四、MainWindow.axaml 中 Log ListBox 保持 UTF8 显示
+
+<ListBox x:Name="LogList"
+         ItemsSource="{Binding Logs}"
+         Background="Transparent"
+         BorderThickness="0">
+    <ListBox.ItemTemplate>
+        <DataTemplate x:DataType="models:LogItem">
+            <TextBlock FontFamily="Consolas" FontSize="12" Foreground="{Binding Foreground}">
+                <Run Text="{Binding Time, StringFormat=[{0:HH:mm:ss}]}"/>
+                <Run Text=" "/>
+                <Run Text="{Binding Message}"/>
+            </TextBlock>
+        </DataTemplate>
+    </ListBox.ItemTemplate>
+</ListBox>
+
+确保 FontFamily 支持中文，例如 "Consolas, Microsoft YaHei"
+
+⸻
+
+五、效果说明
+	1.	点击 检查 WSL 状态 → 输出所有 WSL 发行版状态
+	2.	点击 启动 WSL → 启动指定 distro，Log 输出 "started"
+	3.	点击 停止 WSL → 停止指定 distro，错误信息也会显示
+	4.	中文信息不会乱码
+	5.	Log 区自动滚动到最新条目（MainWindow.axaml.cs 已实现）
+
+⸻
+
+六、可拓展点（以后升级）
+	•	动态显示 WSL 是否运行 → 按钮文字切换 启动 / 停止
+	•	支持 多个 distro 选择
+	•	高级：命令执行返回 流式输出，实时滚动显示
+
+⸻
+
+如果你需要，我可以帮你直接把 按钮文字和状态联动，显示 WSL 运行状态，让按钮自动变“启动 / 停止”。
+
+你希望我直接加上吗？
+
+
+
+
+
 明白，我们要在你的 ItemAView + ItemAViewModel 里增加操作 Windows WSL 子系统 的功能，并把返回信息显示在右下角 Log 区。
 我会直接给你 完整实现，保持你现有 MVVM + Avalonia 11 结构。
 
