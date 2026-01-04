@@ -1,0 +1,41 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:ExcelFormatter12.ViewModels"
+             xmlns:conv="clr-namespace:ExcelFormatter12.Converters"
+             x:Class="ExcelFormatter12.Views.ItemAView"
+             x:DataType="vm:ItemAViewModel">
+
+    <UserControl.Resources>
+        <conv:BoolToBrushConverter x:Key="BoolToBrush" TrueBrush="Green" FalseBrush="Gray"/>
+    </UserControl.Resources>
+
+    <StackPanel Spacing="10" Padding="10">
+
+        <TextBlock Text="WSL 操作" FontSize="16" FontWeight="Bold"/>
+
+        <Button Content="检查 WSL 状态"
+                Command="{Binding CheckWslStatusCommand}"
+                Background="{Binding IsWslRunning, Converter={StaticResource BoolToBrush}}"
+                Foreground="White"
+                CornerRadius="6"
+                FontWeight="Bold"
+                Padding="8,4"/>
+
+        <Button Content="启动 WSL"
+                Command="{Binding StartWslCommand}"
+                Background="{Binding IsWslRunning, Converter={StaticResource BoolToBrush}}"
+                Foreground="White"
+                CornerRadius="6"
+                FontWeight="Bold"
+                Padding="8,4"/>
+
+        <Button Content="停止 WSL"
+                Command="{Binding StopWslCommand}"
+                Background="{Binding IsWslRunning, Converter={StaticResource BoolToBrush}}"
+                Foreground="White"
+                CornerRadius="6"
+                FontWeight="Bold"
+                Padding="8,4"/>
+
+    </StackPanel>
+</UserControl>
