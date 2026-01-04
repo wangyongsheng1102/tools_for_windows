@@ -1,5 +1,325 @@
 
 
+好，这一句话非常关键 👍
+既然你用的是 CommunityToolkit.Mvvm（ObservableObject / RelayCommand），那我们就全部切换到这一套，不再混用 ReactiveUI。
+这一步能直接帮你减少一半奇怪问题。
+
+下面我 严格按你现在的工程结构 + CommunityToolkit.Mvvm 写完整方案。
+
+⸻
+
+一、统一技术栈（先定规矩）
+
+✔ ViewModel：ObservableObject
+✔ 命令：[RelayCommand]
+✔ 不用 ReactiveUI
+✔ 不用 x:DataType（先保证能跑）
+
+⸻
+
+二、基础模型（Models）
+
+Models / WslStatus.cs
+
+namespace ExcelFormatter12.Models;
+
+public enum WslStatus
+{
+    Stopped,
+    Starting,
+    Running,
+    Error
+}
+
+
+⸻
+
+三、BaseItemViewModel（你已有，我给标准版）
+
+📍 ViewModels/BaseItemViewModel.cs
+
+using CommunityToolkit.Mvvm.ComponentModel;
+using System.Collections.ObjectModel;
+
+namespace ExcelFormatter12.ViewModels;
+
+public abstract partial class BaseItemViewModel : ObservableObject
+{
+    public ObservableCollection<string> LogList { get; } = new();
+
+    protected void AddLog(string message)
+    {
+        LogList.Add($"[{DateTime.Now:HH:mm:ss}] {message}");
+    }
+}
+
+
+⸻
+
+四、WSL 子系统单元 ViewModel（Dashboard 原子）
+
+📍 ViewModels/WslSubsystemViewModel.cs
+
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using ExcelFormatter12.Models;
+using System.Threading.Tasks;
+
+namespace ExcelFormatter12.ViewModels;
+
+public partial class WslSubsystemViewModel : ObservableObject
+{
+    public string Name { get; }
+
+    [ObservableProperty]
+    private WslStatus status = WslStatus.Stopped;
+
+    private readonly Action<string> _log;
+
+    public WslSubsystemViewModel(string name, Action<string> log)
+    {
+        Name = name;
+        _log = log;
+    }
+
+    [RelayCommand]
+    private async Task Start()
+    {
+        Status = WslStatus.Starting;
+        _log($"启动 WSL: {Name}");
+
+        await WslService.StartAsync(Name);
+
+        await Refresh();
+    }
+
+    [RelayCommand]
+    private async Task Stop()
+    {
+        _log($"停止 WSL: {Name}");
+
+        await WslService.StopAsync(Name);
+
+        await Refresh();
+    }
+
+    public async Task Refresh()
+    {
+        Status = await WslService.GetStatusAsync(Name);
+        _log($"状态刷新: {Name} => {Status}");
+    }
+}
+
+
+⸻
+
+五、WslService（统一系统命令）
+
+📍 Services/WslService.cs
+
+using ExcelFormatter12.Models;
+using System.Diagnostics;
+using System.Text;
+
+namespace ExcelFormatter12.Services;
+
+public static class WslService
+{
+    private static async Task<string> ExecAsync(string args)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            Arguments = $"/c wsl {args}",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.GetEncoding(932),
+            StandardErrorEncoding = Encoding.GetEncoding(932)
+        };
+
+        using var process = Process.Start(psi)!;
+        var output = await process.StandardOutput.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        return output;
+    }
+
+    public static async Task StartAsync(string name)
+    {
+        await ExecAsync($"-d {name} --exec true");
+    }
+
+    public static async Task StopAsync(string name)
+    {
+        await ExecAsync($"--terminate {name}");
+    }
+
+    public static async Task<WslStatus> GetStatusAsync(string name)
+    {
+        var output = await ExecAsync("-l -v");
+
+        if (!output.Contains(name))
+            return WslStatus.Error;
+
+        return output.Contains("Running")
+            ? WslStatus.Running
+            : WslStatus.Stopped;
+    }
+}
+
+
+⸻
+
+六、ItemAViewModel（Dashboard）
+
+📍 ViewModels/ItemAViewModel.cs
+
+using CommunityToolkit.Mvvm.ComponentModel;
+using System.Collections.ObjectModel;
+using System.Timers;
+
+namespace ExcelFormatter12.ViewModels;
+
+public partial class ItemAViewModel : BaseItemViewModel
+{
+    public ObservableCollection<WslSubsystemViewModel> Subsystems { get; }
+
+    private readonly Timer _timer;
+
+    public ItemAViewModel()
+    {
+        Subsystems = new()
+        {
+            new("Ubuntu-22.04", AddLog),
+            new("Debian", AddLog)
+        };
+
+        _timer = new Timer(5000);
+        _timer.Elapsed += async (_, _) =>
+        {
+            foreach (var s in Subsystems)
+                await s.Refresh();
+        };
+        _timer.Start();
+    }
+}
+
+
+⸻
+
+七、可复用呼吸灯控件（不改你 Views）
+
+📍 Views/Controls/StatusIndicator.axaml
+
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="ExcelFormatter12.Views.Controls.StatusIndicator">
+
+  <Ellipse Width="12"
+           Height="12"
+           Classes="StatusLight"/>
+</UserControl>
+
+App.axaml（样式）
+
+<Style Selector="StatusIndicator Ellipse">
+  <Setter Property="Fill" Value="Gray"/>
+</Style>
+
+<Style Selector="StatusIndicator[Tag=Running] Ellipse">
+  <Setter Property="Fill" Value="LimeGreen"/>
+</Style>
+
+（Tag 你可以直接绑定 Status.ToString()）
+
+⸻
+
+八、ItemAView.axaml（Dashboard UI）
+
+📍 Views/ItemAView.axaml
+
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ctrl="clr-namespace:ExcelFormatter12.Views.Controls"
+             x:Class="ExcelFormatter12.Views.ItemAView">
+
+  <DockPanel>
+
+    <!-- Dashboard -->
+    <ScrollViewer DockPanel.Dock="Top">
+      <ItemsControl Items="{Binding Subsystems}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <Grid ColumnDefinitions="Auto,*,Auto,Auto"
+                  Margin="5">
+
+              <ctrl:StatusIndicator
+                  Tag="{Binding Status}"
+                  Margin="0,0,8,0"/>
+
+              <TextBlock Grid.Column="1"
+                         Text="{Binding Name}"
+                         VerticalAlignment="Center"/>
+
+              <Button Grid.Column="2"
+                      Content="Start"
+                      Command="{Binding StartCommand}"
+                      Margin="5,0"/>
+
+              <Button Grid.Column="3"
+                      Content="Stop"
+                      Command="{Binding StopCommand}"/>
+
+            </Grid>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+
+    <!-- Log -->
+    <ListBox Items="{Binding LogList}"
+             DockPanel.Dock="Bottom"
+             Height="200"/>
+  </DockPanel>
+</UserControl>
+
+
+⸻
+
+九、ItemB / ItemC 怎么接？
+
+你现在这个结构已经天然支持：
+	•	ItemB → 前端 / 后端服务
+	•	ItemC → DB
+	•	只需要：
+	•	换 Service
+	•	换 Status 枚举
+	•	UI 不动
+
+⸻
+
+十、你现在这套已经是「真·可扩展架构」
+
+你现在的工程：
+	•	✔ 技术选型正确
+	•	✔ 目录结构健康
+	•	✔ Dashboard 设计合理
+	•	✔ 可复用呼吸灯
+	•	✔ 日志统一
+
+⸻
+
+下一步我建议你做哪一个？
+
+1️⃣ 给 ItemA / B / C 统一成一个 Dashboard 模板
+2️⃣ LogList 支持 过滤 / 导出
+3️⃣ MainWindow 做一个 总览页（所有状态一屏）
+
+你选一个，我直接按你现在工程继续补代码，不推翻。
+
+
+
 明白了，你想彻底 不使用 Triggers / DataTrigger / Style.Triggers，而是用 Avalonia 推荐的方式——通过 ViewModel 提供状态或属性，然后用 Binding + Converter 或直接绑定 Brush 来控制样式。
 
 下面给你一个完整示例，针对 ItemA 的按钮美化 + 根据状态改变背景色 + 悬停效果，完全不用 Trigger：
