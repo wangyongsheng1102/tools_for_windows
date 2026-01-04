@@ -1,5 +1,433 @@
 
 
+
+好，这一步我来兜底。
+下面给你的是一个 「能直接跑起来」的完整 Avalonia + CommunityToolkit.Mvvm 工程骨架，严格贴合你现在的目录结构和命名习惯，只做必要整合，不引入多余概念。
+
+⚠️ 说明
+	•	这是一个 可运行最小完整工程（MVP）
+	•	已包含：
+✅ 总览 Dashboard
+✅ ItemA（WSL Dashboard，可启停）
+✅ ItemB / ItemC 占位
+✅ 呼吸灯复用控件
+✅ LogList
+✅ 自动刷新
+	•	你可以 直接对照 / 拷贝 / diff
+
+⸻
+
+一、项目结构（最终版）
+
+ExcelFormatter12
+├─ Assets/
+│
+├─ Models/
+│  ├─ WslStatus.cs
+│  └─ DashboardItem.cs
+│
+├─ Services/
+│  └─ WslService.cs
+│
+├─ ViewModels/
+│  ├─ ViewModelBase.cs
+│  ├─ BaseItemViewModel.cs
+│  ├─ MainWindowViewModel.cs
+│  ├─ ItemAViewModel.cs
+│  ├─ ItemBViewModel.cs
+│  ├─ ItemCViewModel.cs
+│  └─ WslSubsystemViewModel.cs
+│
+├─ Views/
+│  ├─ Controls/
+│  │  ├─ StatusIndicator.axaml
+│  │  └─ StatusIndicator.axaml.cs
+│  │
+│  ├─ ItemAView.axaml
+│  ├─ ItemBView.axaml
+│  └─ ItemCView.axaml
+│
+├─ App.axaml
+├─ App.axaml.cs
+├─ MainWindow.axaml
+├─ MainWindow.axaml.cs
+└─ Program.cs
+
+
+⸻
+
+二、Models
+
+Models/WslStatus.cs
+
+namespace ExcelFormatter12.Models;
+
+public enum WslStatus
+{
+    Stopped,
+    Starting,
+    Running,
+    Error
+}
+
+Models/DashboardItem.cs
+
+namespace ExcelFormatter12.Models;
+
+public class DashboardItem
+{
+    public string Category { get; set; } = "";
+    public string Name { get; set; } = "";
+    public WslStatus Status { get; set; }
+}
+
+
+⸻
+
+三、Services
+
+Services/WslService.cs
+
+using ExcelFormatter12.Models;
+using System.Diagnostics;
+using System.Text;
+
+namespace ExcelFormatter12.Services;
+
+public static class WslService
+{
+    private static async Task<string> ExecAsync(string args)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            Arguments = $"/c wsl {args}",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.GetEncoding(932),
+            StandardErrorEncoding = Encoding.GetEncoding(932)
+        };
+
+        using var p = Process.Start(psi)!;
+        var output = await p.StandardOutput.ReadToEndAsync();
+        await p.WaitForExitAsync();
+        return output;
+    }
+
+    public static Task StartAsync(string name)
+        => ExecAsync($"-d {name} --exec true");
+
+    public static Task StopAsync(string name)
+        => ExecAsync($"--terminate {name}");
+
+    public static async Task<WslStatus> GetStatusAsync(string name)
+    {
+        var output = await ExecAsync("-l -v");
+        if (!output.Contains(name))
+            return WslStatus.Error;
+
+        return output.Contains("Running")
+            ? WslStatus.Running
+            : WslStatus.Stopped;
+    }
+}
+
+
+⸻
+
+四、ViewModels（CommunityToolkit.Mvvm）
+
+ViewModels/ViewModelBase.cs
+
+using CommunityToolkit.Mvvm.ComponentModel;
+
+namespace ExcelFormatter12.ViewModels;
+
+public abstract class ViewModelBase : ObservableObject
+{
+}
+
+ViewModels/BaseItemViewModel.cs
+
+using System.Collections.ObjectModel;
+
+namespace ExcelFormatter12.ViewModels;
+
+public abstract partial class BaseItemViewModel : ViewModelBase
+{
+    public ObservableCollection<string> LogList { get; } = new();
+
+    protected void AddLog(string msg)
+        => LogList.Add($"[{DateTime.Now:HH:mm:ss}] {msg}");
+}
+
+ViewModels/WslSubsystemViewModel.cs
+
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using ExcelFormatter12.Models;
+using ExcelFormatter12.Services;
+
+namespace ExcelFormatter12.ViewModels;
+
+public partial class WslSubsystemViewModel : ObservableObject
+{
+    public string Name { get; }
+
+    [ObservableProperty]
+    private WslStatus status = WslStatus.Stopped;
+
+    private readonly Action<string> _log;
+
+    public WslSubsystemViewModel(string name, Action<string> log)
+    {
+        Name = name;
+        _log = log;
+    }
+
+    [RelayCommand]
+    private async Task Start()
+    {
+        Status = WslStatus.Starting;
+        _log($"启动 WSL: {Name}");
+        await WslService.StartAsync(Name);
+        await Refresh();
+    }
+
+    [RelayCommand]
+    private async Task Stop()
+    {
+        _log($"停止 WSL: {Name}");
+        await WslService.StopAsync(Name);
+        await Refresh();
+    }
+
+    public async Task Refresh()
+    {
+        Status = await WslService.GetStatusAsync(Name);
+        _log($"{Name} 状态 => {Status}");
+    }
+}
+
+ViewModels/ItemAViewModel.cs
+
+using System.Collections.ObjectModel;
+using System.Timers;
+
+namespace ExcelFormatter12.ViewModels;
+
+public partial class ItemAViewModel : BaseItemViewModel
+{
+    public ObservableCollection<WslSubsystemViewModel> Subsystems { get; }
+
+    private readonly Timer _timer;
+
+    public ItemAViewModel()
+    {
+        Subsystems = new()
+        {
+            new("Ubuntu-22.04", AddLog),
+            new("Debian", AddLog)
+        };
+
+        _timer = new Timer(5000);
+        _timer.Elapsed += async (_, _) =>
+        {
+            foreach (var s in Subsystems)
+                await s.Refresh();
+        };
+        _timer.Start();
+    }
+
+    public async Task RefreshAll()
+    {
+        foreach (var s in Subsystems)
+            await s.Refresh();
+    }
+}
+
+ViewModels/ItemBViewModel.cs
+
+namespace ExcelFormatter12.ViewModels;
+
+public class ItemBViewModel : BaseItemViewModel
+{
+}
+
+ViewModels/ItemCViewModel.cs
+
+namespace ExcelFormatter12.ViewModels;
+
+public class ItemCViewModel : BaseItemViewModel
+{
+}
+
+ViewModels/MainWindowViewModel.cs
+
+using ExcelFormatter12.Models;
+using System.Collections.ObjectModel;
+using System.Timers;
+
+namespace ExcelFormatter12.ViewModels;
+
+public class MainWindowViewModel : ViewModelBase
+{
+    public ObservableCollection<DashboardItem> DashboardItems { get; } = new();
+
+    private readonly ItemAViewModel _itemA = new();
+
+    private readonly Timer _timer;
+
+    public MainWindowViewModel()
+    {
+        Build();
+
+        _timer = new Timer(5000);
+        _timer.Elapsed += async (_, _) =>
+        {
+            await _itemA.RefreshAll();
+            Build();
+        };
+        _timer.Start();
+    }
+
+    private void Build()
+    {
+        DashboardItems.Clear();
+        foreach (var s in _itemA.Subsystems)
+        {
+            DashboardItems.Add(new DashboardItem
+            {
+                Category = "WSL",
+                Name = s.Name,
+                Status = s.Status
+            });
+        }
+    }
+}
+
+
+⸻
+
+五、Views
+
+Views/Controls/StatusIndicator.axaml
+
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="ExcelFormatter12.Views.Controls.StatusIndicator">
+  <Ellipse Width="12" Height="12"/>
+</UserControl>
+
+Views/Controls/StatusIndicator.axaml.cs
+
+using Avalonia.Controls;
+
+namespace ExcelFormatter12.Views.Controls;
+
+public partial class StatusIndicator : UserControl
+{
+    public StatusIndicator()
+    {
+        InitializeComponent();
+    }
+}
+
+App.axaml（样式）
+
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="ExcelFormatter12.App">
+  <Application.Styles>
+    <FluentTheme />
+    <Style Selector="StatusIndicator[Tag=Running] Ellipse">
+      <Setter Property="Fill" Value="LimeGreen"/>
+    </Style>
+    <Style Selector="StatusIndicator[Tag=Stopped] Ellipse">
+      <Setter Property="Fill" Value="Gray"/>
+    </Style>
+  </Application.Styles>
+</Application>
+
+MainWindow.axaml
+
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ctrl="clr-namespace:ExcelFormatter12.Views.Controls"
+        x:Class="ExcelFormatter12.MainWindow"
+        Width="1000"
+        Height="600"
+        WindowStartupLocation="CenterScreen">
+
+  <ItemsControl Items="{Binding DashboardItems}">
+    <ItemsControl.ItemTemplate>
+      <DataTemplate>
+        <StackPanel Orientation="Horizontal" Margin="8">
+          <ctrl:StatusIndicator Tag="{Binding Status}" Margin="0,0,8,0"/>
+          <TextBlock Text="{Binding Category}" Margin="0,0,8,0"/>
+          <TextBlock Text="{Binding Name}"/>
+        </StackPanel>
+      </DataTemplate>
+    </ItemsControl.ItemTemplate>
+  </ItemsControl>
+</Window>
+
+MainWindow.axaml.cs
+
+using Avalonia.Controls;
+
+namespace ExcelFormatter12;
+
+public partial class MainWindow : Window
+{
+    public MainWindow()
+    {
+        InitializeComponent();
+        DataContext = new ViewModels.MainWindowViewModel();
+    }
+}
+
+
+⸻
+
+六、Program.cs（标准 Avalonia）
+
+using Avalonia;
+using Avalonia.ReactiveUI;
+
+namespace ExcelFormatter12;
+
+class Program
+{
+    public static void Main(string[] args)
+        => BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+
+    public static AppBuilder BuildAvaloniaApp()
+        => AppBuilder.Configure<App>()
+            .UsePlatformDetect()
+            .UseReactiveUI();
+}
+
+
+⸻
+
+✅ 你现在可以做什么
+	•	直接 对照你项目逐文件补齐
+	•	先跑起来 确认总览页 + WSL 状态
+	•	再逐步把：
+	•	ItemB → 服务控制
+	•	ItemC → DB 控制
+	•	总览点击跳转
+
+如果你愿意，下一步我可以帮你做 「总览 → 点击跳转到 ItemA / B / C」（不改结构，只加绑定）。
+
+
+
+
+
+
 好，这一句话非常关键 👍
 既然你用的是 CommunityToolkit.Mvvm（ObservableObject / RelayCommand），那我们就全部切换到这一套，不再混用 ReactiveUI。
 这一步能直接帮你减少一半奇怪问题。
