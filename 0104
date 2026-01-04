@@ -1,3 +1,196 @@
+
+明白了，我们现在要做两件事：
+	1.	在 UserControl（例如 ItemAView）中加入 WSL 启停逻辑
+	2.	输出整个 UI 草图（包含左侧菜单、右侧内容区、ItemAView 的操作按钮等）
+
+我帮你整理一个可运行框架，保留 MVVM 结构，并给出草图示意。
+
+⸻
+
+一、工程结构示意（简化）
+
+WslDevManager/
+├─ Views/
+│  ├─ MainWindow.axaml
+│  ├─ MainWindow.axaml.cs
+│  └─ Pages/
+│      ├─ ItemAView.axaml       <-- 控制单个 WSL 实例
+│      ├─ ItemAView.axaml.cs
+│      └─ LogsView.axaml
+│      └─ LogsView.axaml.cs
+├─ ViewModels/
+│  ├─ MainWindowViewModel.cs
+│  └─ Pages/
+│      ├─ ItemAViewModel.cs
+│      └─ LogsViewModel.cs
+
+
+⸻
+
+二、ItemAView UI 示例（XAML）
+
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:WslDevManager.ViewModels.Pages"
+             x:Class="WslDevManager.Views.Pages.ItemAView">
+
+  <Grid Margin="10" RowDefinitions="Auto,Auto,*,Auto">
+    <!-- WSL 名称 -->
+    <TextBlock Text="{Binding WslName}" FontSize="16" FontWeight="Bold"/>
+
+    <!-- 状态 -->
+    <TextBlock Grid.Row="1" Text="{Binding Status}" Margin="0,5,0,10"/>
+
+    <!-- 启停按钮 -->
+    <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="10">
+      <Button Content="启动 WSL"
+              Command="{Binding StartCommand}"
+              Width="100"/>
+      <Button Content="停止 WSL"
+              Command="{Binding StopCommand}"
+              Width="100"/>
+    </StackPanel>
+
+    <!-- 日志输出 -->
+    <TextBox Grid.Row="3" Text="{Binding Log}" IsReadOnly="True"
+             VerticalScrollBarVisibility="Auto" Height="150"/>
+  </Grid>
+</UserControl>
+
+
+⸻
+
+三、ItemAViewModel（逻辑示例）
+
+using System;
+using System.Reactive;
+using ReactiveUI;
+using System.Diagnostics;
+using System.Threading.Tasks;
+
+namespace WslDevManager.ViewModels.Pages;
+
+public class ItemAViewModel : ViewModelBase
+{
+    private string _status = "未启动";
+    public string Status
+    {
+        get => _status;
+        set => this.RaiseAndSetIfChanged(ref _status, value);
+    }
+
+    private string _log;
+    public string Log
+    {
+        get => _log;
+        set => this.RaiseAndSetIfChanged(ref _log, value);
+    }
+
+    public string WslName { get; } = "Ubuntu-22.04";
+
+    public ReactiveCommand<Unit, Unit> StartCommand { get; }
+    public ReactiveCommand<Unit, Unit> StopCommand { get; }
+
+    public ItemAViewModel()
+    {
+        StartCommand = ReactiveCommand.CreateFromTask(StartWsl);
+        StopCommand = ReactiveCommand.CreateFromTask(StopWsl);
+    }
+
+    private async Task StartWsl()
+    {
+        Status = "启动中...";
+        Log += $"[{DateTime.Now:T}] 启动 WSL {WslName}\n";
+        await RunCommand($"wsl --distribution {WslName} --exec echo 启动成功");
+        Status = "已启动";
+    }
+
+    private async Task StopWsl()
+    {
+        Status = "停止中...";
+        Log += $"[{DateTime.Now:T}] 停止 WSL {WslName}\n";
+        await RunCommand($"wsl --terminate {WslName}");
+        Status = "已停止";
+    }
+
+    private async Task RunCommand(string command)
+    {
+        await Task.Run(() =>
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("cmd.exe", $"/c {command}")
+                {
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                var process = Process.Start(psi);
+                string output = process.StandardOutput.ReadToEnd();
+                process.WaitForExit();
+                Log += output + "\n";
+            }
+            catch (Exception ex)
+            {
+                Log += $"命令执行出错: {ex.Message}\n";
+            }
+        });
+    }
+}
+
+✅ 这样就把 WSL 启停逻辑封装在 ItemAViewModel，UI 用按钮触发。
+
+⸻
+
+四、MainWindow 的右侧内容集成
+
+<ContentControl Grid.Column="1" Content="{Binding CurrentPage}"/>
+
+	•	CurrentPage 可以绑定 ItemAViewModel 对应的 View（使用 ItemAView）
+	•	左侧菜单选择切换右侧显示不同页面（Overview/Services/ItemA/Logs）
+
+⸻
+
+五、UI 草图示意
+
++-----------------------------------------------+
+|                   WSL Dev Manager            |
++----------------------+------------------------+
+|  左侧菜单            |  右侧内容区            |
+|----------------------|------------------------|
+| Overview             | ItemAView              |
+| Services             | ---------------------  |
+| ItemA                | WSL 名称: Ubuntu-22.04|
+| Logs                 | 状态: 已启动          |
+|                      | [启动 WSL] [停止 WSL] |
+|                      | ---------------------  |
+|                      | 日志输出区域           |
+|                      | ---------------------  |
++----------------------+------------------------+
+
+	•	左侧菜单：Overview / Services / ItemA / Logs
+	•	右侧内容区：根据选择显示不同 UserControl
+	•	ItemAView：
+	•	WSL 名称
+	•	启动 / 停止按钮
+	•	日志输出区
+
+⸻
+
+六、下一步可扩展
+	1.	多个 WSL 实例 → 用 ItemsControl 显示多个 ItemAView
+	2.	前后端服务控制 → 类似启停逻辑
+	3.	日志统一管理 → 将每个 Item 的日志收集到 LogsView
+	4.	状态刷新 → 定时检测 WSL 运行状态
+
+⸻
+
+我可以帮你把 整个主框架 + 左侧菜单 + 右侧多页面（ItemAView、LogsView、OverviewView）+ 启停 WSL 功能 全部整合成 可直接运行的 Avalonia 项目，这样你可以直接测试 WSL 控制逻辑。
+
+你希望我直接帮你整合吗？
+
+
+
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:ExcelFormatter12.ViewModels"
