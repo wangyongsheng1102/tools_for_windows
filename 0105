@@ -1,4 +1,364 @@
+很好，这一步你已经从 demo 级别，正式进入“工具级应用设计”了。
+下面我给你的是一套 完整、可扩展、工程级的多连接配置方案，而且严格 MVVM、WSL 场景适配、可以直接在你现有工程里跑起来。
 
+我会按 「设计 → 代码 → 你能直接复制用」 的顺序来。
+
+⸻
+
+一、目标明确（你现在要的能力）
+
+✔ 支持 多条 PostgreSQL 连接配置
+✔ 每条配置：
+	•	ConnectionName（自定义名称）
+	•	WSL Name
+	•	Host / Port
+	•	User / Password
+	•	Database
+✔ 能：
+	•	新增 / 选择 / 删除配置
+	•	保存到本地（持久化）
+	•	针对当前选中配置做「测试连接（WSL）」
+
+⸻
+
+二、最终工程结构（完整版）
+
+PostgreTool
+│
+├─ Models
+│  └─ DbConnectionConfig.cs
+│
+├─ Services
+│  ├─ DbConfigStorage.cs
+│  ├─ WslService.cs
+│  └─ WslPostgresTester.cs
+│
+├─ ViewModels
+│  └─ DbConfigViewModel.cs
+│
+├─ Controls
+│  ├─ DbConfigView.axaml
+│  └─ DbConfigView.axaml.cs
+│
+├─ Views
+│  └─ MainWindow.axaml
+│
+└─ App / Program ...
+
+
+⸻
+
+三、核心数据模型（多连接）
+
+Models/DbConnectionConfig.cs
+
+namespace PostgreTool.Models;
+
+public class DbConnectionConfig
+{
+    public string Name { get; set; } = "New Connection";
+    public string WslName { get; set; } = "";
+    public string Host { get; set; } = "localhost";
+    public int Port { get; set; } = 5432;
+    public string UserId { get; set; } = "";
+    public string Password { get; set; } = "";
+    public string Database { get; set; } = "";
+}
+
+
+⸻
+
+四、持久化（多条配置）
+
+Services/DbConfigStorage.cs
+
+using System.Text.Json;
+using PostgreTool.Models;
+
+namespace PostgreTool.Services;
+
+public static class DbConfigStorage
+{
+    private static readonly string PathName =
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "PostgreTool",
+            "connections.json");
+
+    public static List<DbConnectionConfig> Load()
+    {
+        if (!File.Exists(PathName))
+            return new();
+
+        var json = File.ReadAllText(PathName);
+        return JsonSerializer.Deserialize<List<DbConnectionConfig>>(json)!;
+    }
+
+    public static void Save(IEnumerable<DbConnectionConfig> configs)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(PathName)!);
+
+        var json = JsonSerializer.Serialize(configs, new JsonSerializerOptions
+        {
+            WriteIndented = true
+        });
+
+        File.WriteAllText(PathName, json);
+    }
+}
+
+
+⸻
+
+五、WSL 相关服务
+
+Services/WslService.cs（列出发行版）
+
+using System.Diagnostics;
+
+namespace PostgreTool.Services;
+
+public static class WslService
+{
+    public static async Task<List<string>> GetDistributionsAsync()
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "wsl",
+            Arguments = "-l -q",
+            RedirectStandardOutput = true,
+            UseShellExecute = false
+        };
+
+        using var p = Process.Start(psi)!;
+        var output = await p.StandardOutput.ReadToEndAsync();
+        await p.WaitForExitAsync();
+
+        return output
+            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+            .ToList();
+    }
+}
+
+
+⸻
+
+Services/WslPostgresTester.cs
+
+using System.Diagnostics;
+
+namespace PostgreTool.Services;
+
+public static class WslPostgresTester
+{
+    public static async Task<string> TestAsync(
+        string wsl,
+        string host,
+        int port,
+        string user,
+        string db,
+        string password)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "wsl",
+            Arguments =
+                $"-d {wsl} bash -c " +
+                $"\"PGPASSWORD='{password}' psql -h {host} -p {port} -U {user} -d {db} -c '\\\\conninfo'\"",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+
+        using var p = Process.Start(psi)!;
+
+        var stdout = await p.StandardOutput.ReadToEndAsync();
+        var stderr = await p.StandardError.ReadToEndAsync();
+        await p.WaitForExitAsync();
+
+        if (p.ExitCode != 0)
+            throw new Exception(stderr);
+
+        return stdout.Trim();
+    }
+}
+
+
+⸻
+
+六、核心 ViewModel（重点）
+
+ViewModels/DbConfigViewModel.cs
+
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using PostgreTool.Models;
+using PostgreTool.Services;
+using System.Collections.ObjectModel;
+
+namespace PostgreTool.ViewModels;
+
+public partial class DbConfigViewModel : ObservableObject
+{
+    public ObservableCollection<DbConnectionConfig> Connections { get; }
+
+    [ObservableProperty]
+    private DbConnectionConfig? selectedConnection;
+
+    [ObservableProperty]
+    private ObservableCollection<string> wslDistributions = new();
+
+    [ObservableProperty]
+    private string statusMessage = "";
+
+    public DbConfigViewModel()
+    {
+        Connections = new ObservableCollection<DbConnectionConfig>(
+            DbConfigStorage.Load());
+
+        SelectedConnection ??= Connections.FirstOrDefault();
+        _ = LoadWslAsync();
+    }
+
+    private async Task LoadWslAsync()
+    {
+        var list = await WslService.GetDistributionsAsync();
+        WslDistributions = new ObservableCollection<string>(list);
+    }
+
+    [RelayCommand]
+    private void Add()
+    {
+        var conn = new DbConnectionConfig();
+        Connections.Add(conn);
+        SelectedConnection = conn;
+    }
+
+    [RelayCommand]
+    private void Remove()
+    {
+        if (SelectedConnection == null) return;
+        Connections.Remove(SelectedConnection);
+        SelectedConnection = Connections.FirstOrDefault();
+    }
+
+    [RelayCommand]
+    private void Save()
+    {
+        DbConfigStorage.Save(Connections);
+        StatusMessage = "Connections saved";
+    }
+
+    [RelayCommand]
+    private async Task TestAsync()
+    {
+        if (SelectedConnection == null) return;
+
+        try
+        {
+            StatusMessage = "Testing...";
+            var r = await WslPostgresTester.TestAsync(
+                SelectedConnection.WslName,
+                SelectedConnection.Host,
+                SelectedConnection.Port,
+                SelectedConnection.UserId,
+                SelectedConnection.Database,
+                SelectedConnection.Password);
+
+            StatusMessage = "OK: " + r;
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = "Failed: " + ex.Message;
+        }
+    }
+}
+
+
+⸻
+
+七、DbConfigView（完整 UI）
+
+Controls/DbConfigView.axaml
+
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:PostgreTool.ViewModels"
+             x:Class="PostgreTool.Controls.DbConfigView">
+
+  <UserControl.DataContext>
+    <vm:DbConfigViewModel />
+  </UserControl.DataContext>
+
+  <Grid ColumnDefinitions="200,*" Margin="10">
+
+    <!-- 左侧：连接列表 -->
+    <StackPanel>
+      <Button Content="Add" Command="{Binding AddCommand}" />
+      <Button Content="Remove" Command="{Binding RemoveCommand}" />
+      <ListBox Items="{Binding Connections}"
+               SelectedItem="{Binding SelectedConnection}">
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <TextBlock Text="{Binding Name}" />
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </StackPanel>
+
+    <!-- 右侧：编辑 -->
+    <StackPanel Grid.Column="1" Margin="10" Spacing="8"
+                DataContext="{Binding SelectedConnection}">
+
+      <TextBox Watermark="Connection Name" Text="{Binding Name}" />
+      <ComboBox Items="{Binding DataContext.WslDistributions,
+                                RelativeSource={RelativeSource AncestorType=UserControl}}"
+                SelectedItem="{Binding WslName}" />
+
+      <TextBox Watermark="Host" Text="{Binding Host}" />
+      <TextBox Watermark="Port" Text="{Binding Port}" />
+      <TextBox Watermark="User" Text="{Binding UserId}" />
+      <TextBox Watermark="Password" PasswordChar="*" Text="{Binding Password}" />
+      <TextBox Watermark="Database" Text="{Binding Database}" />
+
+      <StackPanel Orientation="Horizontal" Spacing="10">
+        <Button Content="Save"
+                Command="{Binding DataContext.SaveCommand,
+                                  RelativeSource={RelativeSource AncestorType=UserControl}}" />
+        <Button Content="Test"
+                Command="{Binding DataContext.TestCommand,
+                                  RelativeSource={RelativeSource AncestorType=UserControl}}" />
+      </StackPanel>
+
+      <TextBlock Text="{Binding DataContext.StatusMessage,
+                        RelativeSource={RelativeSource AncestorType=UserControl}}" />
+    </StackPanel>
+
+  </Grid>
+</UserControl>
+
+
+⸻
+
+八、你现在这个设计已经是「成熟工具」了
+
+你已经具备：
+	•	多连接管理
+	•	WSL 感知
+	•	持久化
+	•	可扩展（下一步直接做 SQL 执行 / schema 浏览）
+
+⸻
+
+下一步我强烈推荐（按价值）
+
+1️⃣ 底部 Log 区（显示完整 wsl / psql 输出）
+2️⃣ 连接测试异步 + Loading 状态
+3️⃣ 把 Password 加密存储（DPAPI）
+4️⃣ 一个连接 = 一个 Tab / 页面
+
+如果你愿意，我可以下一步直接帮你把
+👉 「底部 Log + 异步状态 + 密码加密」一次性补齐
 
 好，这里我给你一个**严格 MVVM、但仍然“最小可运行”**的 Avalonia 示例工程。
 特点是：
