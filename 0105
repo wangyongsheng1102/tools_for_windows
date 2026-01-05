@@ -1,4 +1,353 @@
+好，这一步我们只做“工程大框 + DbConfig 页面骨架”，
+不引入 Service、不引入真实逻辑、不解决 CSV / Compare，目标只有一个：
 
+PostgreToolNew 能编译、能启动、Tab 能切、DbConfig 页面能绑定、状态不乱
+
+下面给你的是 “可直接新建工程后整体粘进去的最小可运行骨架”，严格基于你刚才定下来的 数据结构 + ViewModel 合同。
+
+⸻
+
+一、工程结构（最终冻结版 · 第一阶段）
+
+PostgreToolNew
+│
+├─ App.axaml
+├─ App.axaml.cs
+│
+├─ MainWindow.axaml
+├─ MainWindow.axaml.cs
+│
+├─ Controls
+│   └─ DbConfigView.axaml
+│
+├─ ViewModels
+│   ├─ MainWindowViewModel.cs
+│   ├─ DbConfigViewModel.cs
+│   └─ DbConnectionConfig.cs
+│
+└─ Program.cs
+
+
+⸻
+
+二、Program.cs（标准 Avalonia）
+
+using Avalonia;
+using Avalonia.ReactiveUI;
+using System;
+
+namespace PostgreToolNew;
+
+class Program
+{
+    public static void Main(string[] args)
+        => BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+
+    public static AppBuilder BuildAvaloniaApp()
+        => AppBuilder.Configure<App>()
+            .UsePlatformDetect()
+            .UseReactiveUI()
+            .LogToTrace();
+}
+
+
+⸻
+
+三、App.axaml / App.axaml.cs
+
+App.axaml
+
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="PostgreToolNew.App">
+    <Application.Styles>
+        <FluentTheme Mode="Light"/>
+    </Application.Styles>
+</Application>
+
+App.axaml.cs
+
+using Avalonia;
+using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Markup.Xaml;
+
+namespace PostgreToolNew;
+
+public partial class App : Application
+{
+    public override void Initialize()
+    {
+        AvaloniaXamlLoader.Load(this);
+    }
+
+    public override void OnFrameworkInitializationCompleted()
+    {
+        if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            desktop.MainWindow = new MainWindow
+            {
+                DataContext = new ViewModels.MainWindowViewModel()
+            };
+        }
+
+        base.OnFrameworkInitializationCompleted();
+    }
+}
+
+
+⸻
+
+四、MainWindow（只负责“大框 + Tab”）
+
+MainWindowViewModel.cs
+
+using CommunityToolkit.Mvvm.ComponentModel;
+
+namespace PostgreToolNew.ViewModels;
+
+public class MainWindowViewModel : ObservableObject
+{
+    public DbConfigViewModel DbConfigVM { get; }
+
+    public MainWindowViewModel()
+    {
+        DbConfigVM = new DbConfigViewModel();
+    }
+}
+
+
+⸻
+
+MainWindow.axaml（只管布局，不管业务）
+
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:PostgreToolNew.ViewModels"
+        xmlns:views="clr-namespace:PostgreToolNew.Controls"
+        x:Class="PostgreToolNew.MainWindow"
+        Width="900"
+        Height="600"
+        Title="PostgreToolNew"
+        x:DataType="vm:MainWindowViewModel">
+
+    <TabControl>
+        <!-- Tab 1 : DB Config -->
+        <TabItem Header="DB Config">
+            <views:DbConfigView DataContext="{Binding DbConfigVM}" />
+        </TabItem>
+
+        <!-- Tab 2 : Import / Export (placeholder) -->
+        <TabItem Header="CSV Import / Export">
+            <TextBlock Margin="20"
+                       Text="CSV Import / Export - TODO" />
+        </TabItem>
+
+        <!-- Tab 3 : Compare (placeholder) -->
+        <TabItem Header="CSV Compare">
+            <TextBlock Margin="20"
+                       Text="CSV Compare - TODO" />
+        </TabItem>
+    </TabControl>
+</Window>
+
+
+⸻
+
+五、DbConfig 数据结构（与你刚刚确认的一致）
+
+DbConnectionConfig.cs
+
+namespace PostgreToolNew.ViewModels;
+
+public class DbConnectionConfig
+{
+    public string ConnectionId { get; set; } = Guid.NewGuid().ToString();
+    public string ConnectionName { get; set; } = "";
+
+    public string Host { get; set; } = "";
+    public int Port { get; set; } = 5432;
+    public string Database { get; set; } = "";
+    public string UserId { get; set; } = "";
+    public string Password { get; set; } = "";
+
+    public string WslDistributionName { get; set; } = "";
+
+    public bool IsTested { get; set; }
+    public DateTime? LastTestTime { get; set; }
+}
+
+
+⸻
+
+六、DbConfigViewModel（冻结合同版）
+
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using System.Collections.ObjectModel;
+
+namespace PostgreToolNew.ViewModels;
+
+public partial class DbConfigViewModel : ObservableObject
+{
+    public ObservableCollection<DbConnectionConfig> Connections { get; } = new();
+
+    [ObservableProperty]
+    private DbConnectionConfig? selectedConnection;
+
+    public ObservableCollection<string> WslDistributions { get; } = new();
+
+    [ObservableProperty] private bool isDetailEnabled;
+    [ObservableProperty] private bool canAdd;
+    [ObservableProperty] private bool canRemove;
+    [ObservableProperty] private bool canTest;
+    [ObservableProperty] private bool canSave;
+
+    [ObservableProperty]
+    private string testResultMessage = "";
+
+    public IRelayCommand AddCommand { get; }
+    public IRelayCommand RemoveCommand { get; }
+    public IAsyncRelayCommand TestCommand { get; }
+    public IRelayCommand SaveCommand { get; }
+
+    public DbConfigViewModel()
+    {
+        AddCommand = new RelayCommand(OnAdd);
+        RemoveCommand = new RelayCommand(OnRemove);
+        TestCommand = new AsyncRelayCommand(OnTestAsync);
+        SaveCommand = new RelayCommand(OnSave);
+
+        InitializeState();
+        LoadStubData();
+    }
+
+    private void InitializeState()
+    {
+        IsDetailEnabled = false;
+        CanAdd = true;
+        CanRemove = false;
+        CanTest = false;
+        CanSave = false;
+        TestResultMessage = "";
+    }
+
+    partial void OnSelectedConnectionChanged(
+        DbConnectionConfig? oldValue,
+        DbConnectionConfig? newValue)
+    {
+        if (newValue == null)
+        {
+            InitializeState();
+            return;
+        }
+
+        IsDetailEnabled = true;
+        CanRemove = true;
+        CanTest = true;
+        CanSave = newValue.IsTested;
+
+        TestResultMessage = newValue.IsTested
+            ? $"Last tested at {newValue.LastTestTime}"
+            : "Not tested";
+    }
+
+    private void LoadStubData()
+    {
+        Connections.Add(new DbConnectionConfig
+        {
+            ConnectionName = "Local PostgreSQL",
+            Host = "localhost",
+            Database = "testdb",
+            UserId = "postgres",
+            WslDistributionName = "Ubuntu",
+            IsTested = true,
+            LastTestTime = DateTime.Now
+        });
+    }
+
+    private void OnAdd() { }
+    private void OnRemove() { }
+    private async Task OnTestAsync() => await Task.Delay(300);
+    private void OnSave() { }
+}
+
+
+⸻
+
+七、DbConfigView（只做绑定验证，不写逻辑）
+
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:PostgreToolNew.ViewModels"
+             x:Class="PostgreToolNew.Controls.DbConfigView"
+             x:DataType="vm:DbConfigViewModel">
+
+    <Grid ColumnDefinitions="220,*" Margin="10">
+        <!-- Left: connection list -->
+        <StackPanel>
+            <ListBox ItemsSource="{Binding Connections}"
+                     SelectedItem="{Binding SelectedConnection}" />
+
+            <Button Content="Add"
+                    Margin="0,10,0,0"
+                    Command="{Binding AddCommand}"
+                    IsEnabled="{Binding CanAdd}" />
+
+            <Button Content="Remove"
+                    Margin="0,5,0,0"
+                    Command="{Binding RemoveCommand}"
+                    IsEnabled="{Binding CanRemove}" />
+        </StackPanel>
+
+        <!-- Right: detail -->
+        <StackPanel Grid.Column="1"
+                    Margin="10,0,0,0"
+                    IsEnabled="{Binding IsDetailEnabled}">
+            <TextBox Text="{Binding SelectedConnection.ConnectionName}" />
+            <TextBox Text="{Binding SelectedConnection.Host}" />
+            <TextBox Text="{Binding SelectedConnection.Database}" />
+            <TextBox Text="{Binding SelectedConnection.UserId}" />
+            <TextBox Text="{Binding SelectedConnection.Password}" />
+
+            <ComboBox ItemsSource="{Binding WslDistributions}"
+                      SelectedItem="{Binding SelectedConnection.WslDistributionName}" />
+
+            <TextBlock Margin="0,10,0,0"
+                       Text="{Binding TestResultMessage}" />
+
+            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                <Button Content="Test"
+                        Command="{Binding TestCommand}"
+                        IsEnabled="{Binding CanTest}" />
+                <Button Content="Save"
+                        Margin="10,0,0,0"
+                        Command="{Binding SaveCommand}"
+                        IsEnabled="{Binding CanSave}" />
+            </StackPanel>
+        </StackPanel>
+    </Grid>
+</UserControl>
+
+
+⸻
+
+八、你现在应该看到的结果（这是验收标准）
+
+启动后：
+	•	✅ 窗口正常启动
+	•	✅ 三个 Tab 正常切换
+	•	✅ DbConfig 列表能选中
+	•	✅ 右侧 Enable / Disable 正确变化
+	•	✅ 没有任何 Service / WSL / DB 代码
+
+⸻
+
+下一步（只能选一个）
+	1.	把 DbConfigView 的状态机整理成“规则表”
+	2.	引入 JSON 持久化（仍然不连 DB）
+	3.	开始冻结 CsvImportExportViewModel
+
+你选，我继续。
 
 明白了，我帮你生成一个 完全使用 Avalonia 内置控件的 Page2（CsvExportView + CsvExportViewModel），并且可以直接绑定到 主窗口 Tab2，使用第一页 DbConfig 配置的数据库。
 
