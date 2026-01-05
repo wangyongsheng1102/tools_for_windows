@@ -1,3 +1,302 @@
+
+
+明白了，我帮你生成一个 完全使用 Avalonia 内置控件的 Page2（CsvExportView + CsvExportViewModel），并且可以直接绑定到 主窗口 Tab2，使用第一页 DbConfig 配置的数据库。
+
+⸻
+
+1️⃣ Controls/CsvExportView.xaml
+
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:PostgreTool.ViewModels"
+             x:DataType="vm:CsvExportViewModel">
+
+    <ScrollViewer>
+        <StackPanel Margin="10" Spacing="10">
+
+            <!-- Import Section -->
+            <StackPanel Spacing="5">
+                <TextBlock Text="Import CSV" FontWeight="Bold" FontSize="14"/>
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <Button Content="Select Folder to Import" Command="{Binding ImportFolderCommand}" />
+                    <TextBlock Text="{Binding ImportStatus}" VerticalAlignment="Center"/>
+                </StackPanel>
+            </StackPanel>
+
+            <!-- Export Section -->
+            <StackPanel Spacing="5">
+                <TextBlock Text="Export CSV" FontWeight="Bold" FontSize="14"/>
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <Button Content="Load Tables" Command="{Binding LoadTablesCommand}" />
+                    <Button Content="Toggle Select All" Command="{Binding ToggleSelectAllCommand}" />
+                    <Button Content="Export Selected" Command="{Binding ExportCommand}" />
+                </StackPanel>
+
+                <ListBox Items="{Binding TableList}" Margin="0,5,0,0">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:TableItem">
+                            <StackPanel Orientation="Horizontal">
+                                <CheckBox IsChecked="{Binding IsSelected}" Content="{Binding TableName}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <TextBlock Text="{Binding ExportStatus}" Margin="0,5,0,0"/>
+            </StackPanel>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>
+
+✅ 特点：
+	•	全部使用 Avalonia 内置控件：StackPanel、TextBlock、Button、ListBox、CheckBox
+	•	ScrollViewer 包裹，防止列表过多溢出
+	•	不使用 WPF GroupBox
+	•	分组靠 TextBlock + StackPanel 视觉区分
+
+⸻
+
+2️⃣ ViewModels/CsvExportViewModel.cs
+
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using Npgsql;
+using Avalonia.Controls;
+using System.Collections.ObjectModel;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+using System.Collections.Generic;
+
+namespace PostgreTool.ViewModels
+{
+    public partial class CsvExportViewModel : ObservableObject
+    {
+        private readonly DbConnectionConfig _dbConfig;
+        private readonly Window _mainWindow;
+
+        public CsvExportViewModel(DbConnectionConfig dbConfig, Window mainWindow)
+        {
+            _dbConfig = dbConfig;
+            _mainWindow = mainWindow;
+            TableList = new ObservableCollection<TableItem>();
+        }
+
+        [ObservableProperty]
+        private ObservableCollection<TableItem> tableList;
+
+        [ObservableProperty]
+        private string importStatus;
+
+        [ObservableProperty]
+        private string exportStatus;
+
+        [RelayCommand]
+        public async Task LoadTablesAsync()
+        {
+            try
+            {
+                var tables = await GetTableNamesAsync();
+                TableList.Clear();
+                foreach (var t in tables)
+                    TableList.Add(new TableItem { TableName = t, IsSelected = false });
+            }
+            catch (System.Exception ex)
+            {
+                ExportStatus = $"Load tables failed: {ex.Message}";
+            }
+        }
+
+        [RelayCommand]
+        public void ToggleSelectAll()
+        {
+            bool allSelected = TableList.All(t => t.IsSelected);
+            foreach (var t in TableList)
+                t.IsSelected = !allSelected;
+        }
+
+        [RelayCommand]
+        public async Task ExportAsync()
+        {
+            try
+            {
+                var folder = await SelectFolderAsync();
+                if (string.IsNullOrEmpty(folder)) return;
+
+                foreach (var t in TableList.Where(t => t.IsSelected))
+                {
+                    var filePath = Path.Combine(folder, $"{t.TableName}.csv");
+                    await ExportTableToCsvAsync(t.TableName, filePath);
+                }
+
+                ExportStatus = "Export completed.";
+            }
+            catch (System.Exception ex)
+            {
+                ExportStatus = $"Export failed: {ex.Message}";
+            }
+        }
+
+        [RelayCommand]
+        public async Task ImportFolderAsync()
+        {
+            try
+            {
+                var folder = await SelectFolderAsync();
+                if (string.IsNullOrEmpty(folder)) return;
+
+                var csvFiles = Directory.GetFiles(folder, "*.csv");
+                using var conn = GetConnection();
+                await conn.OpenAsync();
+
+                foreach (var file in csvFiles)
+                {
+                    var tableName = Path.GetFileNameWithoutExtension(file);
+
+                    var cmdDrop = new NpgsqlCommand($"DROP TABLE IF EXISTS \"{tableName}\";", conn);
+                    await cmdDrop.ExecuteNonQueryAsync();
+
+                    var lines = await File.ReadAllLinesAsync(file);
+                    if (lines.Length == 0) continue;
+
+                    var headers = lines[0].Split(',');
+                    var createSql = $"CREATE TABLE \"{tableName}\" ({string.Join(",", headers.Select(h => $"\"{h}\" TEXT"))});";
+                    var cmdCreate = new NpgsqlCommand(createSql, conn);
+                    await cmdCreate.ExecuteNonQueryAsync();
+
+                    for (int i = 1; i < lines.Length; i++)
+                    {
+                        var values = lines[i].Split(',');
+                        var insertSql = $"INSERT INTO \"{tableName}\" ({string.Join(",", headers.Select(h => $"\"{h}\""))}) VALUES ({string.Join(",", values.Select(v => $"'{v.Replace("'", "''")}'"))});";
+                        var cmdInsert = new NpgsqlCommand(insertSql, conn);
+                        await cmdInsert.ExecuteNonQueryAsync();
+                    }
+                }
+
+                ImportStatus = "Import completed.";
+            }
+            catch (System.Exception ex)
+            {
+                ImportStatus = $"Import failed: {ex.Message}";
+            }
+        }
+
+        private NpgsqlConnection GetConnection()
+        {
+            var cs = $"Host={_dbConfig.Host};Database={_dbConfig.Database};Username={_dbConfig.UserId};Password={_dbConfig.Password}";
+            return new NpgsqlConnection(cs);
+        }
+
+        private async Task<List<string>> GetTableNamesAsync()
+        {
+            var tables = new List<string>();
+            using var conn = GetConnection();
+            await conn.OpenAsync();
+
+            var cmd = new NpgsqlCommand("SELECT table_name FROM information_schema.tables WHERE table_schema='public';", conn);
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                tables.Add(reader.GetString(0));
+
+            return tables;
+        }
+
+        private async Task ExportTableToCsvAsync(string tableName, string filePath)
+        {
+            using var conn = GetConnection();
+            await conn.OpenAsync();
+
+            var cmd = new NpgsqlCommand($"SELECT * FROM \"{tableName}\";", conn);
+            using var reader = await cmd.ExecuteReaderAsync();
+
+            using var writer = new StreamWriter(filePath);
+
+            var columns = Enumerable.Range(0, reader.FieldCount).Select(i => reader.GetName(i)).ToArray();
+            await writer.WriteLineAsync(string.Join(",", columns));
+
+            while (await reader.ReadAsync())
+            {
+                var values = Enumerable.Range(0, reader.FieldCount)
+                    .Select(i => reader.GetValue(i)?.ToString()?.Replace(",", "\\,") ?? "")
+                    .ToArray();
+                await writer.WriteLineAsync(string.Join(",", values));
+            }
+        }
+
+        private async Task<string> SelectFolderAsync()
+        {
+            var dlg = new OpenFolderDialog { Title = "Select Folder" };
+            return await dlg.ShowAsync(_mainWindow);
+        }
+    }
+}
+
+
+⸻
+
+3️⃣ ViewModels/TableItem.cs
+
+using CommunityToolkit.Mvvm.ComponentModel;
+
+namespace PostgreTool.ViewModels
+{
+    public partial class TableItem : ObservableObject
+    {
+        [ObservableProperty]
+        private string tableName;
+
+        [ObservableProperty]
+        private bool isSelected;
+    }
+}
+
+
+⸻
+
+4️⃣ 将 CsvExportView 加入 MainWindow Tab2
+
+假设你的 MainWindow 已经有 TabControl：
+
+<TabControl>
+    <TabItem Header="DB Config">
+        <controls:DbConfigView />
+    </TabItem>
+    <TabItem Header="CSV Import/Export">
+        <controls:CsvExportView DataContext="{Binding CsvExportVM}" />
+    </TabItem>
+    <TabItem Header="Placeholder 3">
+        <TextBlock Text="Page 3" />
+    </TabItem>
+</TabControl>
+
+然后在 MainWindowViewModel 中：
+
+public CsvExportViewModel CsvExportVM { get; }
+
+public MainWindowViewModel()
+{
+    CsvExportVM = new CsvExportViewModel(SelectedDbConfig, MainWindowInstance);
+}
+
+这里的 SelectedDbConfig 就是你第一页 DbConfigView 选中的数据库配置，MainWindowInstance 用于 FolderDialog。
+
+⸻
+
+这样整个 Page2 完全使用 Avalonia 内置控件，无自定义 GroupBox，Tab2 可以直接显示 CSV 导入/导出界面。
+
+⸻
+
+我可以帮你再画一个 整个 TabControl 完整 MVVM 绑定示意图，保证 Page1/2/3 都能直接运行，所有命令和状态都生效。
+
+你希望我画吗？
+
+
+
+
+
+
+
 明白了，你希望 Page2 的 ViewModel、Control 命名风格和你现有工程保持一致：
 	•	第一页是 Controls/DbConfigView.xaml + ViewModels/DbConfigViewModel.cs
 	•	所以第二页也应该类似：
