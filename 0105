@@ -1,3 +1,256 @@
+
+
+
+好 👍
+那我们严格按你现在的工程节奏来：
+只做 JSON 持久化，不碰 DB、不碰 WSL、不改 UI 结构、不推翻你已有逻辑。
+
+目标只有一个：
+
+DbConfig 页面在“重启应用后”能完整恢复连接列表 + 选中项
+
+⸻
+
+一、本次只做这几件事（范围锁死）
+
+✅ 要做：
+	•	定义一个 JSON 存储文件结构
+	•	启动时 Load
+	•	点击 Save 时 Save
+	•	支持多条连接
+	•	恢复 SelectedConnection
+
+❌ 不做：
+	•	不自动保存
+	•	不校验连接
+	•	不引入复杂 Service 架构
+	•	不改 UI XAML
+
+⸻
+
+二、JSON 文件设计（先定死）
+
+📁 存储位置（建议，稳定）：
+
+%AppData%/PostgreToolNew/dbconnections.json
+
+📄 JSON 结构（非常重要，后面别改）：
+
+{
+  "connections": [
+    {
+      "connectionId": "guid",
+      "connectionName": "Local PostgreSQL",
+      "host": "localhost",
+      "port": 5432,
+      "database": "testdb",
+      "userId": "postgres",
+      "password": "xxx",
+      "wslDistributionName": "Ubuntu",
+      "isTested": true,
+      "lastTestTime": "2026-01-01T12:00:00"
+    }
+  ],
+  "lastSelectedConnectionId": "guid"
+}
+
+
+⸻
+
+三、存储 DTO（只给 JSON 用）
+
+📄 DbConfigStorage.cs
+
+namespace PostgreToolNew.ViewModels;
+
+public class DbConfigStorage
+{
+    public List<DbConnectionConfig> Connections { get; set; } = new();
+    public string? LastSelectedConnectionId { get; set; }
+}
+
+
+⸻
+
+四、JSON 存取工具类（极简、稳定）
+
+📄 DbConfigStorageService.cs
+
+using System.Text.Json;
+
+namespace PostgreToolNew.ViewModels;
+
+public static class DbConfigStorageService
+{
+    private static readonly string Folder =
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "PostgreToolNew");
+
+    private static readonly string FilePath =
+        Path.Combine(Folder, "dbconnections.json");
+
+    public static DbConfigStorage Load()
+    {
+        try
+        {
+            if (!File.Exists(FilePath))
+                return new DbConfigStorage();
+
+            var json = File.ReadAllText(FilePath);
+            return JsonSerializer.Deserialize<DbConfigStorage>(json)
+                   ?? new DbConfigStorage();
+        }
+        catch
+        {
+            return new DbConfigStorage();
+        }
+    }
+
+    public static void Save(DbConfigStorage storage)
+    {
+        Directory.CreateDirectory(Folder);
+
+        var json = JsonSerializer.Serialize(
+            storage,
+            new JsonSerializerOptions
+            {
+                WriteIndented = true
+            });
+
+        File.WriteAllText(FilePath, json);
+    }
+}
+
+👉 特点：
+	•	不抛异常
+	•	不依赖 Service 容器
+	•	方便你现在调试
+
+⸻
+
+五、接入到 DbConfigViewModel（关键）
+
+1️⃣ 构造函数中：替换 Stub 数据加载
+
+你现在构造函数里有：
+
+InitializeState();
+LoadStubData();
+
+👉 改成：
+
+InitializeState();
+LoadFromStorage();
+
+
+⸻
+
+2️⃣ 实现 LoadFromStorage（重点）
+
+private void LoadFromStorage()
+{
+    var storage = DbConfigStorageService.Load();
+
+    Connections.Clear();
+    foreach (var conn in storage.Connections)
+    {
+        Connections.Add(conn);
+    }
+
+    if (!string.IsNullOrEmpty(storage.LastSelectedConnectionId))
+    {
+        SelectedConnection = Connections
+            .FirstOrDefault(c => c.ConnectionId == storage.LastSelectedConnectionId);
+    }
+}
+
+⚠️ 注意：
+	•	必须最后才设置 SelectedConnection
+	•	这样 OnSelectedConnectionChanged 会自动跑
+	•	UI 状态自然恢复
+
+⸻
+
+3️⃣ SaveCommand：真正实现保存
+
+private void OnSave()
+{
+    if (SelectedConnection == null)
+        return;
+
+    var storage = new DbConfigStorage
+    {
+        Connections = Connections.ToList(),
+        LastSelectedConnectionId = SelectedConnection.ConnectionId
+    };
+
+    DbConfigStorageService.Save(storage);
+
+    CanSave = false;
+}
+
+
+⸻
+
+六、你现在可以验证的行为（验收清单）
+
+请你 按这个顺序测试：
+	1.	启动程序（无 json）
+	•	列表为空 ✅
+	2.	Add 一个连接（哪怕字段是空）
+	3.	手动选中它
+	4.	点击 Save
+	5.	关闭程序
+	6.	再启动
+
+你应该看到：
+	•	连接列表恢复 ✅
+	•	上次选中的连接自动选中 ✅
+	•	右侧输入框启用状态正确 ✅
+
+⸻
+
+七、常见问题（你大概率会问）
+
+❓ 为什么不自动保存？
+
+因为：
+	•	编辑中状态 ≠ 可保存状态
+	•	Test 之前不能保存
+	•	CSV 页面会依赖 “Tested == true”
+
+👉 手动 Save 是正确设计
+
+⸻
+
+❓ ConnectionName 改了，ListBox 不刷新？
+
+这是预期行为，属于下一阶段（ItemViewModel）
+
+现在先不动。
+
+⸻
+
+八、下一步（非常明确）
+
+在 JSON 持久化完成后，下一步只能是：
+
+👉 接入 WslService，加载 Distribution 列表
+
+因为：
+	•	JSON 已经能恢复 WslDistributionName
+	•	现在正好可以验证 ComboBox 选中问题
+
+如果你同意，直接回一句：
+
+“下一步做 WSL 列表加载”
+
+我会在不破坏你现在结构的前提下接着写。
+
+
+
+
 好，这一步我们只做“工程大框 + DbConfig 页面骨架”，
 不引入 Service、不引入真实逻辑、不解决 CSV / Compare，目标只有一个：
 
