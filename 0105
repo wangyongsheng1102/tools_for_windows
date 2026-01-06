@@ -1,4 +1,203 @@
 
+好，这次我们不再讨论可能性，而是严格照着第一个页面（DbConfigView）的做法，把第二个页面“复制式”接入 MainWindow。
+你说「按方案 A 来做，跟第一个页面一样」，这是唯一正确路线 👍
+
+下面我按已经存在的工程上下文来梳理，不引入新模式、不改你已有逻辑。
+
+⸻
+
+一、先明确「第一个页面」现在是怎么工作的（基准）
+
+你现在 第一个页面是 OK 的，它的模式一定是：
+
+1️⃣ MainWindowViewModel 里有一个子 VM
+
+public DbConfigViewModel DbConfigVM { get; }
+
+2️⃣ MainWindow.axaml 里是这样用的（方案 A）
+
+<TabItem Header="DB Config">
+    <views:DbConfigView DataContext="{Binding DbConfigVM}"/>
+</TabItem>
+
+3️⃣ DbConfigView.axaml.cs 没有自己 new VM
+
+public partial class DbConfigView : UserControl
+{
+    public DbConfigView()
+    {
+        InitializeComponent();
+    }
+}
+
+👉 VM 完全由 MainWindowViewModel 管理
+
+这点非常关键。
+
+⸻
+
+二、第二个页面「必须一模一样」，不准有任何变形
+
+我们现在就按这个模板来。
+
+⸻
+
+三、第二个页面应有的文件结构（对齐第一个）
+
+Controls/
+ └─ CsvTransferView.axaml
+ └─ CsvTransferView.axaml.cs
+
+ViewModels/
+ └─ CsvTransferViewModel.cs
+
+命名、位置、角色 和 DbConfig 一致。
+
+⸻
+
+四、CsvTransferViewModel（和 DbConfigVM 同级）
+
+public partial class CsvTransferViewModel : ObservableObject
+{
+    private readonly DbConfigViewModel _dbConfigVM;
+
+    public CsvTransferViewModel(DbConfigViewModel dbConfigVM)
+    {
+        _dbConfigVM = dbConfigVM;
+
+        // 关键：监听的是 DbConfigVM.SelectedConnection
+        _dbConfigVM.PropertyChanged += DbConfigVM_PropertyChanged;
+    }
+
+    private void DbConfigVM_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(DbConfigViewModel.SelectedConnection))
+        {
+            Debug.WriteLine("CsvTransferVM detected SelectedConnection change");
+
+            OnConnectionChanged(_dbConfigVM.SelectedConnection);
+        }
+    }
+
+    private void OnConnectionChanged(DbConnectionConfig? conn)
+    {
+        // 这里以后做：加载表列表、初始化状态
+    }
+}
+
+⚠️ 注意：
+	•	不监听 MainWindowViewModel
+	•	不搞 SelectedConnection 转发
+	•	直接监听 DbConfigViewModel
+
+这和你现在的实际工程结构是最稳定的。
+
+⸻
+
+五、MainWindowViewModel：像第一个页面一样 new 它
+
+public partial class MainWindowViewModel : ObservableObject
+{
+    public DbConfigViewModel DbConfigVM { get; }
+    public CsvTransferViewModel CsvTransferVM { get; }
+
+    public MainWindowViewModel()
+    {
+        DbConfigVM = new DbConfigViewModel();
+        CsvTransferVM = new CsvTransferViewModel(DbConfigVM);
+    }
+}
+
+✅ 到这里为止，没有任何“跨层监听问题”。
+
+⸻
+
+六、CsvTransferView.axaml（不要搞复杂）
+
+<UserControl
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    x:Class="PostgreToolNew.Controls.CsvTransferView">
+
+    <StackPanel Margin="10">
+        <TextBlock Text="CSV Import / Export Page"/>
+    </StackPanel>
+
+</UserControl>
+
+CsvTransferView.axaml.cs
+
+public partial class CsvTransferView : UserControl
+{
+    public CsvTransferView()
+    {
+        InitializeComponent();
+    }
+}
+
+❗这里 不要 new ViewModel
+❗不要碰 DataContext
+
+⸻
+
+七、MainWindow.axaml：完全复制第一个 Tab 的写法
+
+<TabControl>
+    <TabItem Header="DB Config">
+        <views:DbConfigView DataContext="{Binding DbConfigVM}"/>
+    </TabItem>
+
+    <TabItem Header="CSV Transfer">
+        <views:CsvTransferView DataContext="{Binding CsvTransferVM}"/>
+    </TabItem>
+</TabControl>
+
+🚫 这里绝对禁止的事情
+	•	❌ TabItem 上写 x:DataType="CsvTransferViewModel"
+	•	❌ CsvTransferView 自己 new VM
+	•	❌ MainWindow.cs 里手动 LoadCsvXXX
+
+⸻
+
+八、为什么你之前「怎么都进不了」
+
+结合你前面的描述，问题一定是以下之一：
+	1.	CsvTransferViewModel 被 new 了两次
+	2.	监听了 MainWindowViewModel.SelectedConnection（而它其实没用）
+	3.	TabItem 的 x:DataType 和真实 DataContext 不一致
+	4.	MainWindow.axaml.cs 里用了“命令式切页面”
+
+现在这个方案 把这 4 个坑全部避开。
+
+⸻
+
+九、你现在应该看到的现象（用于自检）
+
+✔ 启动后
+✔ 第二个 Tab 能正常显示
+✔ 切换 DB 配置时
+✔ CsvTransferViewModel 能收到 SelectedConnection 变化日志
+
+如果 哪一步不符合，那一定是某个文件没有按上面写。
+
+⸻
+
+十、下一步建议（别急）
+
+你现在可以选择：
+
+1️⃣ 先在 CsvTransferVM 里 显示当前连接名（只读）
+2️⃣ 再做 Load Tables（Npgsql）
+3️⃣ 再做 Import / Export
+
+一步一步来，你现在这个工程，已经不适合“边写边改结构”了。
+
+如果你愿意，下一步我可以帮你：
+	•	在 CsvTransferView 上 只显示 SelectedConnection.ConnectionName
+	•	验证整个链路 100% 通
+
+你一句话，我接着来。
+
 
 好，那我这次直接给你一整套「第二页（CSV Import / Export）」可直接落地的完整代码，并且严格遵守你前面反复强调的原则：
 	•	✅ Avalonia（不是 WPF）
