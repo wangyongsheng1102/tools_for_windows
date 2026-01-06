@@ -1,4 +1,290 @@
 
+
+
+太好了！既然第二个页面已经能正常显示，我们就可以开始正式实现 CSV 导入导出功能了。
+我会按照你的工程结构（PostgreToolNew、MVVM、第二个页面叫 CsvTransferView + CsvTransferViewModel）来写，并保证和第一个页面一样的模式，一步步实现功能。
+
+⸻
+
+一、CsvTransferViewModel 的整体设计
+
+功能点：
+	1.	导出数据库到 CSV
+	•	显示数据库中的表列表（可多选）
+	•	支持全选
+	•	导出到指定文件夹，文件名用 TableName.csv
+	2.	导入 CSV 到数据库
+	•	选择文件夹，导入该文件夹下所有 CSV
+	•	不 Drop 表，而是 Truncate
+	•	先清空表，然后导入数据
+	•	所有表操作必须用 Npgsql
+	3.	日志功能
+	•	操作实时刷新到 UI（ListBox 或 TextBox）
+	•	显示进度 / 成功 / 失败信息
+
+⸻
+
+CsvTransferViewModel.cs
+
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using Npgsql;
+using System.IO;
+
+namespace PostgreToolNew.ViewModels;
+
+public partial class CsvTransferViewModel : ObservableObject
+{
+    private readonly DbConfigViewModel _dbConfigVM;
+
+    public CsvTransferViewModel(DbConfigViewModel dbConfigVM)
+    {
+        _dbConfigVM = dbConfigVM;
+        _dbConfigVM.PropertyChanged += DbConfigVM_PropertyChanged;
+
+        Tables = new ObservableCollection<TableItem>();
+        LogMessages = new ObservableCollection<string>();
+    }
+
+    [ObservableProperty]
+    private ObservableCollection<TableItem> tables;
+
+    [ObservableProperty]
+    private ObservableCollection<string> logMessages;
+
+    [ObservableProperty]
+    private bool isBusy;
+
+    private NpgsqlConnection? _connection;
+
+    private void DbConfigVM_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(DbConfigViewModel.SelectedConnection))
+        {
+            OnConnectionChanged(_dbConfigVM.SelectedConnection);
+        }
+    }
+
+    private void OnConnectionChanged(DbConnectionConfig? conn)
+    {
+        LogMessages.Add($"Connection changed: {conn?.ConnectionName}");
+
+        if (conn == null)
+        {
+            _connection?.Close();
+            Tables.Clear();
+            return;
+        }
+
+        try
+        {
+            var cs = $"Host={conn.Host};Port={conn.Port};Username={conn.UserId};Password={conn.Password};Database={conn.Database}";
+            _connection = new NpgsqlConnection(cs);
+            _connection.Open();
+
+            LoadTableList();
+        }
+        catch (Exception ex)
+        {
+            LogMessages.Add($"Error connecting DB: {ex.Message}");
+        }
+    }
+
+    private void LoadTableList()
+    {
+        Tables.Clear();
+
+        if (_connection == null) return;
+
+        using var cmd = new NpgsqlCommand(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema='public'", _connection);
+
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var tableName = reader.GetString(0);
+            Tables.Add(new TableItem { TableName = tableName, IsSelected = false });
+        }
+
+        LogMessages.Add($"Loaded {Tables.Count} tables");
+    }
+
+    [RelayCommand]
+    private async Task ExportSelectedTablesAsync()
+    {
+        if (_connection == null) return;
+
+        var folder = await SelectFolderAsync();
+        if (folder == null) return;
+
+        IsBusy = true;
+
+        try
+        {
+            foreach (var table in Tables.Where(t => t.IsSelected))
+            {
+                var file = Path.Combine(folder, table.TableName + ".csv");
+                using var writer = new StreamWriter(file);
+                using var cmd = new NpgsqlCommand($"SELECT * FROM {table.TableName}", _connection);
+                using var reader = await cmd.ExecuteReaderAsync();
+
+                // 写 header
+                var columns = Enumerable.Range(0, reader.FieldCount)
+                    .Select(i => reader.GetName(i));
+                await writer.WriteLineAsync(string.Join(",", columns));
+
+                while (await reader.ReadAsync())
+                {
+                    var values = Enumerable.Range(0, reader.FieldCount)
+                        .Select(i => reader[i]?.ToString()?.Replace(",", "，"));
+                    await writer.WriteLineAsync(string.Join(",", values));
+                }
+
+                LogMessages.Add($"Exported table {table.TableName} to {file}");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogMessages.Add($"Export error: {ex.Message}");
+        }
+
+        IsBusy = false;
+    }
+
+    [RelayCommand]
+    private async Task ImportCsvFolderAsync()
+    {
+        if (_connection == null) return;
+
+        var folder = await SelectFolderAsync();
+        if (folder == null) return;
+
+        IsBusy = true;
+
+        try
+        {
+            var files = Directory.GetFiles(folder, "*.csv");
+            foreach (var file in files)
+            {
+                var tableName = Path.GetFileNameWithoutExtension(file);
+
+                using var reader = new StreamReader(file);
+                var header = (await reader.ReadLineAsync())?.Split(',');
+
+                if (header == null) continue;
+
+                using var cmd = new NpgsqlCommand("", _connection);
+                cmd.CommandText = $"TRUNCATE TABLE {tableName} RESTART IDENTITY";
+                await cmd.ExecuteNonQueryAsync();
+
+                string? line;
+                while ((line = await reader.ReadLineAsync()) != null)
+                {
+                    var values = line.Split(',');
+                    var columns = string.Join(",", header);
+                    var parameters = string.Join(",", header.Select((h, i) => $"@p{i}"));
+
+                    cmd.CommandText = $"INSERT INTO {tableName} ({columns}) VALUES ({parameters})";
+                    cmd.Parameters.Clear();
+                    for (int i = 0; i < values.Length; i++)
+                        cmd.Parameters.AddWithValue($"@p{i}", values[i]);
+
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                LogMessages.Add($"Imported CSV {file} into {tableName}");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogMessages.Add($"Import error: {ex.Message}");
+        }
+
+        IsBusy = false;
+    }
+
+    // 简单封装 Avalonia FolderPicker
+    private async Task<string?> SelectFolderAsync()
+    {
+        var dlg = new Avalonia.Controls.OpenFolderDialog();
+        return await dlg.ShowAsync(App.Current.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
+            ? desktop.MainWindow
+            : null);
+    }
+
+    public class TableItem : ObservableObject
+    {
+        [ObservableProperty]
+        private string tableName = "";
+
+        [ObservableProperty]
+        private bool isSelected;
+    }
+}
+
+
+⸻
+
+十、CsvTransferView.axaml
+
+<UserControl
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="clr-namespace:PostgreToolNew.ViewModels"
+    x:Class="PostgreToolNew.Controls.CsvTransferView">
+
+    <StackPanel Margin="10">
+        <TextBlock Text="CSV Import / Export" FontWeight="Bold" FontSize="16"/>
+
+        <StackPanel Orientation="Horizontal" Margin="0,10,0,0" Spacing="10">
+            <Button Content="Export Selected Tables" Command="{Binding ExportSelectedTablesCommand}" />
+            <Button Content="Import CSV Folder" Command="{Binding ImportCsvFolderCommand}" />
+        </StackPanel>
+
+        <TextBlock Text="Tables:" FontWeight="Bold" Margin="0,10,0,0"/>
+        <ListBox Items="{Binding Tables}" Height="200">
+            <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:CsvTransferViewModel+TableItem">
+                    <StackPanel Orientation="Horizontal">
+                        <CheckBox IsChecked="{Binding IsSelected}"/>
+                        <TextBlock Text="{Binding TableName}" Margin="5,0,0,0"/>
+                    </StackPanel>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+
+        <TextBlock Text="Log:" FontWeight="Bold" Margin="0,10,0,0"/>
+        <ListBox Items="{Binding LogMessages}" Height="150"/>
+    </StackPanel>
+</UserControl>
+
+
+⸻
+
+✅ 功能实现说明：
+	1.	导出：选择表 → 选择文件夹 → 导出 CSV
+	2.	导入：选择文件夹 → 读取 CSV → TRUNCATE + INSERT
+	3.	表列表和日志：用 ObservableCollection 绑定
+	4.	UI 实时刷新：ObservableObject + ObservableCollection 自动更新
+
+⸻
+
+我下一步可以帮你做：
+	•	导入/导出进度条
+	•	日志滚动到底部
+	•	导入 CSV 中文 / 特殊字符优化
+	•	支持多数据库类型或错误提示更友好
+
+⸻
+
+我想确认一下：
+
+你希望现在就加日志滚动和进度条吗？还是先让这个功能先能用？
+
+
+
 好，这次我们不再讨论可能性，而是严格照着第一个页面（DbConfigView）的做法，把第二个页面“复制式”接入 MainWindow。
 你说「按方案 A 来做，跟第一个页面一样」，这是唯一正确路线 👍
 
