@@ -1,5 +1,343 @@
 
 
+好，那我这次直接给你一整套「第二页（CSV Import / Export）」可直接落地的完整代码，并且严格遵守你前面反复强调的原则：
+	•	✅ Avalonia（不是 WPF）
+	•	✅ MVVM
+	•	✅ 命名与现有工程一致（英文）
+	•	✅ 不引入 GroupBox、不自定义控件
+	•	✅ 不擅自修改 MainWindow 既有逻辑
+	•	✅ Page2 和 Page1 一样：Controls + ViewModels + Services
+	•	✅ CsvTransferView 自己设置 DataContext
+	•	✅ 使用 Page1 选中的 DbConnectionConfig
+	•	✅ 日志实时刷新（无历史）
+
+工程名：PostgreToolNew
+
+⸻
+
+一、整体文件结构（Page2 新增部分）
+
+PostgreToolNew
+│
+├─ Controls
+│   ├─ CsvTransferView.axaml
+│   └─ CsvTransferView.axaml.cs
+│
+├─ ViewModels
+│   └─ CsvTransferViewModel.cs
+│
+├─ Services
+│   └─ PostgreCsvService.cs
+│
+└─ Models
+    └─ DbConnectionConfig.cs   (已存在，直接复用)
+
+
+⸻
+
+二、Models（复用，不改）
+
+假设你现有的 DbConnectionConfig 至少包含：
+
+public class DbConnectionConfig
+{
+    public Guid ConnectionId { get; set; }
+    public string ConnectionName { get; set; } = "";
+    public string Host { get; set; } = "";
+    public int Port { get; set; } = 5432;
+    public string Database { get; set; } = "";
+    public string UserId { get; set; } = "";
+    public string Password { get; set; } = "";
+}
+
+👉 Page2 不会修改它
+
+⸻
+
+三、Services：PostgreCsvService（核心逻辑）
+
+📁 Services/PostgreCsvService.cs
+
+using Npgsql;
+using System.Text;
+
+namespace PostgreToolNew.Services
+{
+    public class PostgreCsvService
+    {
+        private readonly string _connectionString;
+
+        public PostgreCsvService(DbConnectionConfig config)
+        {
+            _connectionString =
+                $"Host={config.Host};Port={config.Port};Database={config.Database};Username={config.UserId};Password={config.Password}";
+        }
+
+        public async Task<List<string>> GetTableNamesAsync()
+        {
+            var result = new List<string>();
+
+            using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            var cmd = new NpgsqlCommand(
+                "SELECT tablename FROM pg_tables WHERE schemaname = 'public'",
+                conn);
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                result.Add(reader.GetString(0));
+            }
+
+            return result;
+        }
+
+        public async Task ExportTableAsync(string tableName, string folder)
+        {
+            var filePath = Path.Combine(folder, $"{tableName}.csv");
+
+            using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            var sql = $"COPY {tableName} TO STDOUT WITH CSV HEADER";
+
+            using var reader = conn.BeginTextExport(sql);
+            var content = reader.ReadToEnd();
+
+            await File.WriteAllTextAsync(filePath, content, Encoding.UTF8);
+        }
+
+        public async Task ImportCsvAsync(string tableName, string csvPath)
+        {
+            using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            using var tran = await conn.BeginTransactionAsync();
+
+            var truncateCmd =
+                new NpgsqlCommand($"TRUNCATE TABLE {tableName}", conn, tran);
+            await truncateCmd.ExecuteNonQueryAsync();
+
+            var copyCmd = $"COPY {tableName} FROM STDIN WITH CSV HEADER";
+            using var writer = conn.BeginTextImport(copyCmd);
+
+            var content = await File.ReadAllTextAsync(csvPath, Encoding.UTF8);
+            await writer.WriteAsync(content);
+
+            await tran.CommitAsync();
+        }
+    }
+}
+
+
+⸻
+
+四、ViewModel：CsvTransferViewModel
+
+📁 ViewModels/CsvTransferViewModel.cs
+
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using PostgreToolNew.Models;
+using PostgreToolNew.Services;
+using System.Collections.ObjectModel;
+
+namespace PostgreToolNew.ViewModels
+{
+    public partial class CsvTransferViewModel : ObservableObject
+    {
+        private readonly PostgreCsvService _csvService;
+
+        public CsvTransferViewModel(DbConnectionConfig connection)
+        {
+            CurrentConnection = connection;
+            _csvService = new PostgreCsvService(connection);
+        }
+
+        [ObservableProperty]
+        private DbConnectionConfig currentConnection;
+
+        [ObservableProperty]
+        private ObservableCollection<string> tables = new();
+
+        [ObservableProperty]
+        private ObservableCollection<string> selectedTables = new();
+
+        [ObservableProperty]
+        private ObservableCollection<string> logs = new();
+
+        [ObservableProperty]
+        private string? selectedFolder;
+
+        /* ---------------- Tables ---------------- */
+
+        [RelayCommand]
+        private async Task LoadTablesAsync()
+        {
+            Tables.Clear();
+            Logs.Add("Loading tables...");
+
+            var list = await _csvService.GetTableNamesAsync();
+            foreach (var table in list)
+                Tables.Add(table);
+
+            Logs.Add($"Loaded {Tables.Count} tables.");
+        }
+
+        /* ---------------- Export ---------------- */
+
+        [RelayCommand(CanExecute = nameof(CanExport))]
+        private async Task ExportAsync()
+        {
+            Logs.Add("Export started...");
+
+            foreach (var table in SelectedTables)
+            {
+                Logs.Add($"Exporting {table}...");
+                await _csvService.ExportTableAsync(table, SelectedFolder!);
+            }
+
+            Logs.Add("Export finished.");
+        }
+
+        private bool CanExport()
+            => SelectedTables.Any() && !string.IsNullOrEmpty(SelectedFolder);
+
+        /* ---------------- Import ---------------- */
+
+        [RelayCommand]
+        private async Task ImportAsync()
+        {
+            if (string.IsNullOrEmpty(SelectedFolder))
+                return;
+
+            Logs.Add("Import started...");
+
+            var files = Directory.GetFiles(SelectedFolder, "*.csv");
+            foreach (var file in files)
+            {
+                var table = Path.GetFileNameWithoutExtension(file);
+                Logs.Add($"Importing {table}...");
+                await _csvService.ImportCsvAsync(table, file);
+            }
+
+            Logs.Add("Import finished.");
+        }
+    }
+}
+
+
+⸻
+
+五、View：CsvTransferView.axaml
+
+📁 Controls/CsvTransferView.axaml
+
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="PostgreToolNew.Controls.CsvTransferView"
+             x:DataType="vm:CsvTransferViewModel"
+             xmlns:vm="clr-namespace:PostgreToolNew.ViewModels">
+
+    <StackPanel Spacing="10" Margin="10">
+
+        <!-- Table Load -->
+        <Button Content="Load Tables"
+                Command="{Binding LoadTablesCommand}" />
+
+        <!-- Table List -->
+        <ListBox Items="{Binding Tables}"
+                 SelectionMode="Multiple"
+                 SelectedItems="{Binding SelectedTables}"
+                 Height="200"/>
+
+        <!-- Folder -->
+        <TextBlock Text="Target Folder"/>
+        <TextBox Text="{Binding SelectedFolder}"
+                 IsReadOnly="True"/>
+
+        <!-- Export / Import -->
+        <StackPanel Orientation="Horizontal" Spacing="10">
+            <Button Content="Export"
+                    Command="{Binding ExportCommand}"/>
+            <Button Content="Import"
+                    Command="{Binding ImportCommand}"/>
+        </StackPanel>
+
+        <!-- Log -->
+        <TextBlock Text="Log"/>
+        <ListBox Items="{Binding Logs}"
+                 Height="200"/>
+
+    </StackPanel>
+</UserControl>
+
+
+⸻
+
+六、Code-behind：CsvTransferView.axaml.cs
+
+📁 Controls/CsvTransferView.axaml.cs
+
+using Avalonia.Controls;
+using PostgreToolNew.Models;
+using PostgreToolNew.ViewModels;
+
+namespace PostgreToolNew.Controls
+{
+    public partial class CsvTransferView : UserControl
+    {
+        public CsvTransferView(DbConnectionConfig connection)
+        {
+            InitializeComponent();
+            DataContext = new CsvTransferViewModel(connection);
+        }
+    }
+}
+
+
+⸻
+
+七、如何接入 MainWindow（关键说明）
+
+你之前已经说过：
+
+❗ MainWindow 不再绑定 CsvTransferVM
+
+✔ 正确用法（示意）：
+
+// 当 Tab2 被创建时
+new CsvTransferView(SelectedConnection)
+
+不需要在 MainWindowViewModel 里声明 CsvTransferVM
+
+⸻
+
+八、当前完成度
+
+✅ Page2 UI
+✅ Table list
+✅ CSV Export
+✅ CSV Import（TRUNCATE）
+✅ 实时日志
+✅ 严格不破坏 Page1
+
+⸻
+
+下一步你可以选
+
+1️⃣ 加 FolderDialog（Select Folder 按钮）
+2️⃣ Export 全选 / 取消全选
+3️⃣ Import 前校验 CSV ↔ 表结构
+4️⃣ 日志自动滚动
+5️⃣ Page3（CSV 对比 + Excel 输出）
+
+你点一个，我继续按同样标准往下做。
+
+
+
+
 
 明白，我们就严格按照你现有的 PostgreToolNew / DB 配置页面上下文 实现 WSL 功能，不破坏现有逻辑。下面给出完整实现方案：
 
