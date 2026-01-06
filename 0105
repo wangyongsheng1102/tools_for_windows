@@ -1,5 +1,155 @@
 
 
+
+明白，我们就严格按照你现有的 PostgreToolNew / DB 配置页面上下文 实现 WSL 功能，不破坏现有逻辑。下面给出完整实现方案：
+
+目标：
+	•	下拉框显示系统中所有 WSL 分发
+	•	选中子系统 → 更新 SelectedConnection.WslName
+	•	JSON 保存 / Load 时保持同步
+	•	保留 Add / Remove / Test / Save 功能
+
+⸻
+
+一、WSL 服务类
+
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+
+namespace PostgreToolNew.Services
+{
+    public class WslService
+    {
+        public async Task<List<string>> GetDistributionsAsync()
+        {
+            var distributions = new List<string>();
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = "wsl.exe",
+                Arguments = "--list --quiet",
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var process = Process.Start(psi);
+            if (process != null)
+            {
+                string output = await process.StandardOutput.ReadToEndAsync();
+                process.WaitForExit();
+
+                // 处理每行：去掉空格、\0
+                var lines = output.Split('\n');
+                foreach (var line in lines)
+                {
+                    var cleaned = Regex.Replace(line, @"[\0\s]", "");
+                    if (!string.IsNullOrWhiteSpace(cleaned))
+                        distributions.Add(cleaned);
+                }
+            }
+
+            return distributions;
+        }
+    }
+}
+
+✅ 处理了你之前提到的空格和控制字符问题
+
+⸻
+
+二、DbConfigViewModel 增加 WSL 属性
+
+[ObservableProperty]
+private List<string> wslDistributions = new List<string>();
+
+private readonly WslService _wslService = new WslService();
+
+1️⃣ 异步加载 WSL 列表
+
+public async Task LoadWslAsync()
+{
+    var list = await _wslService.GetDistributionsAsync();
+    WslDistributions = list;
+
+    // 如果当前 SelectedConnection 有 WslName，确保下拉框显示正确
+    if (SelectedConnection != null && !string.IsNullOrEmpty(SelectedConnection.WslName))
+    {
+        if (WslDistributions.Contains(SelectedConnection.WslName))
+        {
+            SelectedConnection.WslName = SelectedConnection.WslName;
+        }
+    }
+}
+
+2️⃣ SelectedConnection 改变时同步 WslName
+
+partial void OnSelectedConnectionChanged(DbConnectionConfig? value)
+{
+    if (value != null)
+    {
+        LastSelectedConnectionId = value.ConnectionId;
+
+        // 如果 WSL 列表已加载
+        if (WslDistributions.Contains(value.WslName))
+        {
+            SelectedConnection.WslName = value.WslName;
+        }
+    }
+
+    SaveCommand.NotifyCanExecuteChanged();
+}
+
+
+⸻
+
+三、UI XAML 绑定
+
+<ComboBox Items="{Binding WslDistributions}"
+          SelectedItem="{Binding SelectedConnection.WslName, Mode=TwoWay}"
+          Watermark="Select WSL Distribution"/>
+
+	•	Items → WslDistributions
+	•	SelectedItem → SelectedConnection.WslName 双向绑定
+	•	Watermark 提示选择
+
+⸻
+
+四、在构造函数或 JSON Load 后调用
+
+public DbConfigViewModel()
+{
+    LoadFromJson();
+
+    // 异步加载 WSL
+    _ = LoadWslAsync();
+}
+
+构造函数不能 await，所以用 _ =  启动异步任务
+
+⸻
+
+五、行为说明
+	1.	打开工具 → JSON 读取 Connections → WSL 下拉框填充
+	2.	上次选中 WSL 会自动选中
+	3.	用户切换 WSL → SelectedConnection.WslName 自动更新
+	4.	点击 Test → 可以用 WSL 信息执行命令
+	5.	点击 Save → JSON 会保存 SelectedConnection.WslName
+
+⸻
+
+✅ 完整符合你现有上下文逻辑
+
+如果你确认，我可以帮你生成整合 WSL、SelectedConnection、LastSelectedConnectionId、Save、Test、Add、Remove 的 DbConfigViewModel 完整代码，直接可用。
+
+你希望我直接生成吗？
+
+
+
+
+
 明白，我帮你整理一版 完整且和你现有工程兼容的 DbConfigViewModel，重点在于：
 	•	SelectedConnection 与 LastSelectedConnectionId 完全同步
 	•	JSON Load / Save 正确处理
