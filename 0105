@@ -1,5 +1,392 @@
 
 
+是的，你这个判断完全正确 👍
+而且现在这个时机 正好就是实现 Add / Remove 的正确节点。
+
+原因不是“顺手”，而是架构上已经具备闭环条件了。
+
+⸻
+
+一句话结论（先给）
+
+现在必须把 Add / Remove 实现掉
+否则 JSON 持久化是“半成品”，后面做 WSL / DB / CSV 都会被反噬。
+
+而且注意一句很重要的：
+
+Add / Remove 是“状态机的一部分”，不是简单的集合操作
+
+下面我会 严格在你现有 ViewModel 基础上补全逻辑，
+不改结构、不推翻你已有代码、不引入 Service。
+
+⸻
+
+一、先明确 Add / Remove 的“行为规则”（定死）
+
+我们先把规则说清楚，再写代码，避免你后面改来改去。
+
+⸻
+
+1️⃣ Add 行为规则（非常关键）
+
+点击 Add 后：
+	•	新增一条 空的连接配置
+	•	自动选中该连接
+	•	右侧详情区启用
+	•	状态：
+	•	IsTested = false
+	•	CanSave = false
+	•	CanTest = true
+	•	ListBox 显示：New Connection（默认名）
+
+👉 Add ≠ Save
+👉 新增后不立即写 JSON
+
+⸻
+
+2️⃣ Remove 行为规则
+
+点击 Remove：
+	•	仅当有选中项时生效
+	•	从 Connections 中移除选中项
+	•	不立即写 JSON（避免误删）
+	•	移除后：
+	•	若还有连接 → 自动选中第一条
+	•	若为空 → 右侧禁用
+
+⸻
+
+3️⃣ Save 的语义（再次强调）
+	•	Save = “确认当前 Connections 列表状态”
+	•	Save 后才会写入 JSON
+	•	Remove 后 必须手动 Save 才生效
+
+这是一个非常成熟、不会坑用户的桌面工具行为。
+
+⸻
+
+二、实现 Add（直接可用）
+
+在你现有的 DbConfigViewModel 中，只补实现，不改签名。
+
+private void OnAdd()
+{
+    var newConnection = new DbConnectionConfig
+    {
+        ConnectionName = "New Connection",
+        IsTested = false
+    };
+
+    Connections.Add(newConnection);
+
+    SelectedConnection = newConnection;
+
+    // 状态控制
+    IsDetailEnabled = true;
+    CanRemove = true;
+    CanTest = true;
+    CanSave = false;
+
+    TestResultMessage = "Not tested";
+}
+
+这个实现的关键点
+	•	必须最后设置 SelectedConnection
+	•	触发你已有的 OnSelectedConnectionChanged
+	•	状态不会乱
+
+⸻
+
+三、实现 Remove（安全、不惊吓用户）
+
+private void OnRemove()
+{
+    if (SelectedConnection == null)
+        return;
+
+    var toRemove = SelectedConnection;
+    var index = Connections.IndexOf(toRemove);
+
+    Connections.Remove(toRemove);
+
+    if (Connections.Count == 0)
+    {
+        SelectedConnection = null;
+        InitializeState();
+        return;
+    }
+
+    // 尽量选中相邻项，体验最好
+    if (index >= Connections.Count)
+        index = Connections.Count - 1;
+
+    SelectedConnection = Connections[index];
+}
+
+为什么不自动 Save？
+
+因为：
+	•	Remove 是破坏性操作
+	•	桌面工具里 “删除即保存”是非常糟糕的 UX
+	•	你后面 CSV / Compare 都会受益于这个设计
+
+⸻
+
+四、一个你现在一定会遇到的“现象说明”
+
+❓ 新建连接后，ListBox 一直显示 New Connection
+
+这是完全正确的当前行为。
+
+原因：
+	•	DbConnectionConfig 不是 ObservableObject
+	•	修改 ConnectionName 不会通知 ListBox
+
+✅ 这是“阶段一允许的行为”
+
+我们之前已经约定过：
+
+现在先冻结结构，不为 UI 即时刷新去污染 Model
+
+后面如果你要做，我们会用 ConnectionItemViewModel 来解决。
+
+⸻
+
+五、现在这一步完成后的“系统状态”
+
+到目前为止，你已经有：
+
+✅ MainWindow 大框
+✅ DbConfig 页面
+✅ ViewModel 状态机
+✅ JSON Load / Save
+✅ Add / Remove
+
+这时 DbConfig 页面已经是一个 “可被其它页面依赖的稳定模块” 了。
+
+⸻
+
+六、下一步只能选一个（强烈建议顺序）
+
+✅ 推荐顺序（我帮你排好）
+
+1️⃣ 接入 WSL Distribution 加载（验证 ComboBox 选中问题）
+2️⃣ Test Connection（最小 Npgsql）
+3️⃣ CSV Import / Export 页面
+
+⸻
+
+如果你同意，直接回我一句：
+
+“下一步接入 WSL 列表”
+
+我会 严格按你之前的 WslService 约定写，不乱改、不绕路。
+
+
+
+
+
+这是个非常好的问题，而且你现在问这个，说明你已经在用**“真实用户视角”看这个工具了 👍
+结论我先给，然后给你工程级、不过度复杂的最佳方案**。
+
+⸻
+
+结论（明确、可执行）
+
+是的，Remove 必须有提示，但提示必须是：
+	•	轻量
+	•	不阻塞
+	•	不引入复杂依赖
+
+也就是说：
+	•	❌ 不要 MessageBox（太打断）
+	•	❌ 不要复杂自定义 Dialog（现在阶段不值得）
+	•	✅ 用 Avalonia 自带的 Window + 简单确认逻辑
+	•	或者 用“双击确认 / 二次点击确认”
+
+我给你 两个方案，你可以选一个；我也会告诉你我更推荐哪个。
+
+⸻
+
+方案一（推荐）：轻量确认对话框（工程正确解）
+
+这是桌面工具最标准的 UX，而且不复杂。
+
+⸻
+
+一、设计原则（很重要）
+	•	提示内容清晰
+	•	不展示太多细节
+	•	用户明确知道：删除后需手动 Save 才生效
+
+⸻
+
+二、实现方式（不破坏你现有结构）
+
+1️⃣ 新增一个极简确认窗口
+
+📄 Controls/ConfirmDialog.axaml
+
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="320"
+        Height="140"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Title="Confirm">
+
+    <StackPanel Margin="16" Spacing="10">
+        <TextBlock x:Name="MessageText"
+                   TextWrapping="Wrap" />
+
+        <StackPanel Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="10">
+            <Button Content="Cancel"
+                    IsCancel="True" />
+            <Button Content="Remove"
+                    IsDefault="True"
+                    x:Name="OkButton" />
+        </StackPanel>
+    </StackPanel>
+</Window>
+
+
+⸻
+
+2️⃣ Code-behind（只干一件事：返回 bool）
+
+📄 ConfirmDialog.axaml.cs
+
+using Avalonia.Controls;
+
+namespace PostgreToolNew.Controls;
+
+public partial class ConfirmDialog : Window
+{
+    public ConfirmDialog(string message)
+    {
+        InitializeComponent();
+        MessageText.Text = message;
+
+        OkButton.Click += (_, _) => Close(true);
+        this.Closing += (_, _) => Close(false);
+    }
+}
+
+
+⸻
+
+3️⃣ DbConfigViewModel 中使用（安全调用）
+
+private async void OnRemove()
+{
+    if (SelectedConnection == null)
+        return;
+
+    var dialog = new ConfirmDialog(
+        $"Remove connection \"{SelectedConnection.ConnectionName}\"?\n" +
+        "This change will take effect only after Save.");
+
+    var result = await dialog.ShowDialog<bool>(
+        App.Current!.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop
+            ? desktop.MainWindow
+            : null);
+
+    if (result != true)
+        return;
+
+    RemoveSelectedConnection();
+}
+
+👉 实际删除逻辑单独封装：
+
+private void RemoveSelectedConnection()
+{
+    var toRemove = SelectedConnection!;
+    var index = Connections.IndexOf(toRemove);
+
+    Connections.Remove(toRemove);
+
+    if (Connections.Count == 0)
+    {
+        SelectedConnection = null;
+        InitializeState();
+        return;
+    }
+
+    if (index >= Connections.Count)
+        index = Connections.Count - 1;
+
+    SelectedConnection = Connections[index];
+}
+
+
+⸻
+
+👍 为什么我推荐这个方案？
+	•	用户不会误删
+	•	删除成本低
+	•	不会引入状态混乱
+	•	后续 CSV / Compare 页面也能复用这个确认框
+
+⸻
+
+方案二（可选）：二次点击确认（无弹窗）
+
+如果你极度不想要弹窗，这是次优解。
+
+行为：
+	•	第一次点 Remove：
+	•	按钮文字变成 Click again to confirm
+	•	3 秒内第二次点击才真正删除
+	•	超时自动取消
+
+⚠️ 不推荐原因：
+	•	Discoverability 差
+	•	用户可能看不懂
+	•	实现比 Dialog 还复杂
+
+⸻
+
+三、重要的架构说明（你一定要知道）
+
+❓ ViewModel 调 Dialog 是不是违反 MVVM？
+
+在桌面应用里，不是。
+
+这是工程现实：
+	•	删除确认是 UI 行为
+	•	不需要跨平台抽象
+	•	不值得为了“纯粹 MVVM”引入复杂服务
+
+你现在做的是 工具型桌面 App，不是教科书。
+
+⸻
+
+四、我给你的明确建议
+
+用方案一（ConfirmDialog）
+
+等你后面 CSV / Compare 页面成熟了，可以统一：
+	•	ConfirmDialog
+	•	ErrorDialog
+	•	InfoDialog
+
+⸻
+
+下一步建议（顺序不变）
+
+1️⃣ 接入 WSL Distribution 加载
+2️⃣ Test Connection
+3️⃣ CSV Import / Export 页面
+
+你如果愿意，我下一步可以 直接在你现在代码基础上把 WSL 列表完整接上，不破坏任何已有逻辑。
+
+只要你回复一句：
+
+“继续，接 WSL 列表”
+
 
 好 👍
 那我们严格按你现在的工程节奏来：
