@@ -1,0 +1,34 @@
+public async Task ExportTableToCsvByCopyAsync(
+    string connectionString,
+    string schemaName,
+    string tableName,
+    string csvPath,
+    IProgress<string>? progress = null)
+{
+    await using var conn = new NpgsqlConnection(connectionString);
+    await conn.OpenAsync();
+
+    progress?.Report($"[処理中] COPY で {schemaName}.{tableName} をエクスポート中...");
+
+    var copySql = $@"
+COPY ""{schemaName}"".""{tableName}""
+TO STDOUT
+WITH (FORMAT CSV, HEADER true, ENCODING 'UTF8', QUOTE '""', ESCAPE '""');
+";
+
+    await using var reader = conn.BeginTextExport(copySql);
+
+    await using var file = new FileStream(csvPath, FileMode.Create, FileAccess.Write, FileShare.None);
+    await using var writer = new StreamWriter(file, new UTF8Encoding(false)); // 不带BOM
+
+    char[] buffer = new char[8192];
+    int read;
+    while ((read = await reader.ReadAsync(buffer, 0, buffer.Length)) > 0)
+    {
+        await writer.WriteAsync(buffer, 0, read);
+    }
+
+    await writer.FlushAsync();
+
+    progress?.Report($"[完了] COPY によるエクスポート完了: {csvPath}");
+}
