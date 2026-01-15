@@ -1,0 +1,321 @@
+太好了 👍，先把 JWT 身份认证打牢是非常正确的顺序。
+下面我给你一套可直接用在 FastAPI 项目中的完整 JWT 身份认证实现方案，包含：
+
+✅ 注册
+✅ 登录
+✅ 密码加密
+✅ JWT 生成
+✅ JWT 校验
+✅ 获取当前用户依赖
+✅ 接口保护示例
+
+全部是工程级可用代码。
+
+⸻
+
+✅ 一、依赖安装
+
+pip install fastapi uvicorn sqlalchemy psycopg2-binary
+pip install python-jose passlib[bcrypt] pydantic[email]
+
+
+⸻
+
+✅ 二、配置
+
+app/core/config.py
+
+from datetime import timedelta
+
+SECRET_KEY = "CHANGE_ME_TO_RANDOM_STRING"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
+
+⚠️ 生产环境一定放到环境变量。
+
+⸻
+
+✅ 三、数据库基础
+
+app/db/session.py
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
+
+DATABASE_URL = "postgresql+psycopg2://user:pwd@localhost/vts"
+
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+
+⸻
+
+app/api/deps.py
+
+from app.db.session import SessionLocal
+from fastapi import Depends
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+⸻
+
+✅ 四、用户模型
+
+app/models/user.py
+
+import uuid
+from sqlalchemy import Column, String
+from sqlalchemy.dialects.postgresql import UUID
+from app.db.session import Base
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String, unique=True, index=True, nullable=False)
+    name = Column(String)
+    password_hash = Column(String, nullable=False)
+
+
+⸻
+
+✅ 五、密码加密工具
+
+app/core/security.py
+
+from passlib.context import CryptContext
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def hash_password(pwd: str) -> str:
+    return pwd_context.hash(pwd)
+
+def verify_password(pwd: str, hash: str) -> bool:
+    return pwd_context.verify(pwd, hash)
+
+
+⸻
+
+✅ 六、JWT 工具
+
+app/core/jwt.py
+
+from datetime import datetime, timedelta
+from jose import jwt
+from app.core.config import SECRET_KEY, ALGORITHM
+
+def create_access_token(data: dict, expires_delta: timedelta):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + expires_delta
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+⸻
+
+✅ 七、Pydantic Schema
+
+app/schemas/user.py
+
+from pydantic import BaseModel, EmailStr
+
+class UserCreate(BaseModel):
+    email: EmailStr
+    name: str
+    password: str
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class UserOut(BaseModel):
+    id: str
+    email: EmailStr
+    name: str
+
+
+⸻
+
+✅ 八、Auth Router（核心）
+
+app/api/auth.py
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from datetime import timedelta
+
+from app.db.session import get_db
+from app.models.user import User
+from app.schemas.user import UserCreate, UserLogin
+from app.core.security import hash_password, verify_password
+from app.core.jwt import create_access_token
+from app.core.config import ACCESS_TOKEN_EXPIRE_MINUTES
+
+router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
+⸻
+
+✅ 注册
+
+@router.post("/register")
+def register(data: UserCreate, db: Session = Depends(get_db)):
+    if db.query(User).filter(User.email == data.email).first():
+        raise HTTPException(400, "Email already registered")
+
+    user = User(
+        email=data.email,
+        name=data.name,
+        password_hash=hash_password(data.password)
+    )
+    db.add(user)
+    db.commit()
+
+    return {"msg": "ok"}
+
+
+⸻
+
+✅ 登录
+
+@router.post("/login")
+def login(data: UserLogin, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == data.email).first()
+    if not user or not verify_password(data.password, user.password_hash):
+        raise HTTPException(401, "Invalid credentials")
+
+    token = create_access_token(
+        {"sub": str(user.id)},
+        timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+
+    return {"access_token": token, "token_type": "bearer"}
+
+
+⸻
+
+✅ 九、JWT 校验依赖（保护接口）
+
+app/api/deps_auth.py
+
+from fastapi import Depends, HTTPException, status
+from jose import jwt, JWTError
+from sqlalchemy.orm import Session
+from fastapi.security import OAuth2PasswordBearer
+
+from app.core.config import SECRET_KEY, ALGORITHM
+from app.db.session import get_db
+from app.models.user import User
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED)
+    except JWTError:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED)
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED)
+
+    return user
+
+
+⸻
+
+✅ 十、受保护接口示例
+
+app/api/project.py
+
+@router.get("/projects")
+def list_projects(
+    user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    return db.query(Project).filter(Project.user_id == user.id).all()
+
+只要没带 token：
+
+直接 401
+
+⸻
+
+✅ 十一、main.py
+
+app/main.py
+
+from fastapi import FastAPI
+from app.api import auth
+
+app = FastAPI()
+
+app.include_router(auth.router)
+
+
+⸻
+
+✅ 十二、前端怎么用（简要）
+
+登录
+
+const res = await axios.post('/api/auth/login', {email, password})
+localStorage.setItem('token', res.data.access_token)
+
+所有请求加 header
+
+axios.interceptors.request.use(config => {
+  config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
+
+⸻
+
+✅ 十三、生产级必须再补的安全点（重要）
+
+后期你一定要加：
+
+项目	原因
+Refresh Token	长时间登录
+Token 黑名单	主动登出
+HTTPS only	JWT 明文
+密码复杂度	企业系统
+
+但 MVP 阶段现在这套完全 OK。
+
+⸻
+
+✅ 下一步强烈建议你继续的是
+
+现在你已经有：
+	•	✔ 完整 JWT 登录体系
+	•	✔ 用户表结构
+
+下一步自然进入：
+
+👉 项目管理 API（必须依赖 JWT）
+
+我可以继续给你：
+
+✅ Project CRUD 完整接口 + 表设计 + 权限控制
+
+或者如果你更想继续后端核心：
+
+✅ 仿真引擎模块设计
+
+你跟我说下一步继续哪一块，我按你的开发顺序继续给你工程级代码。
