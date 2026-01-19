@@ -1,0 +1,359 @@
+明白，这里给你一套可直接执行的 PostgreSQL DDL，包含：
+	•	✅ 创建 schema
+	•	✅ 所有表放入指定 schema
+	•	✅ 全字段日文 COMMENT
+	•	✅ 共通审计字段（作成日／更新日／作成者／更新者）
+	•	✅ 外键与索引
+
+下面假设业务 schema 名为：vts
+
+⸻
+
+✅ 一、Schema 创建
+
+CREATE SCHEMA IF NOT EXISTS vts;
+COMMENT ON SCHEMA vts IS 'VTS Configurator 業務用スキーマ';
+
+
+⸻
+
+✅ 二、UUID 扩展
+
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+
+⸻
+
+✅ 三、用户表
+
+CREATE TABLE vts.users (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email VARCHAR(255) NOT NULL UNIQUE,
+    name VARCHAR(100),
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(50) DEFAULT 'user',
+
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+COMMENT ON TABLE vts.users IS 'システム利用ユーザー';
+
+COMMENT ON COLUMN vts.users.id IS 'ユーザーID';
+COMMENT ON COLUMN vts.users.email IS 'ログイン用メールアドレス';
+COMMENT ON COLUMN vts.users.name IS '表示名';
+COMMENT ON COLUMN vts.users.password_hash IS '暗号化済みパスワード';
+COMMENT ON COLUMN vts.users.role IS '権限種別（admin / user）';
+COMMENT ON COLUMN vts.users.created_at IS '作成日時';
+COMMENT ON COLUMN vts.users.updated_at IS '更新日時';
+
+CREATE INDEX idx_users_email ON vts.users(email);
+
+
+⸻
+
+✅ 四、项目表
+
+CREATE TABLE vts.projects (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    status VARCHAR(50) DEFAULT 'editing',
+    language VARCHAR(10) DEFAULT 'jp',
+    last_total_ct DOUBLE PRECISION,
+
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by UUID,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by UUID,
+
+    CONSTRAINT fk_projects_user
+        FOREIGN KEY (user_id) REFERENCES vts.users(id)
+);
+
+COMMENT ON TABLE vts.projects IS '設計プロジェクト';
+
+COMMENT ON COLUMN vts.projects.id IS 'プロジェクトID';
+COMMENT ON COLUMN vts.projects.user_id IS '所有ユーザーID';
+COMMENT ON COLUMN vts.projects.name IS 'プロジェクト名称';
+COMMENT ON COLUMN vts.projects.status IS '状態（editing / locked）';
+COMMENT ON COLUMN vts.projects.language IS '表示言語';
+COMMENT ON COLUMN vts.projects.last_total_ct IS '最新シミュレーションCT';
+COMMENT ON COLUMN vts.projects.created_at IS '作成日時';
+COMMENT ON COLUMN vts.projects.created_by IS '作成者ユーザーID';
+COMMENT ON COLUMN vts.projects.updated_at IS '更新日時';
+COMMENT ON COLUMN vts.projects.updated_by IS '更新者ユーザーID';
+
+CREATE INDEX idx_projects_user_id ON vts.projects(user_id);
+CREATE UNIQUE INDEX uniq_projects_name_user ON vts.projects(user_id, name);
+
+
+⸻
+
+✅ 五、STEP 设计数据
+
+CREATE TABLE vts.project_data (
+    project_id UUID PRIMARY KEY,
+
+    step1_json JSONB,
+    step2_json JSONB,
+    step3_json JSONB,
+    step4_json JSONB,
+    step5_json JSONB,
+
+    version INTEGER DEFAULT 1,
+
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by UUID,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by UUID,
+
+    CONSTRAINT fk_project_data_project
+        FOREIGN KEY (project_id) REFERENCES vts.projects(id)
+        ON DELETE CASCADE
+);
+
+COMMENT ON TABLE vts.project_data IS 'STEP別設計データ（JSONスナップショット）';
+
+COMMENT ON COLUMN vts.project_data.project_id IS 'プロジェクトID';
+COMMENT ON COLUMN vts.project_data.step1_json IS 'STEP1 基本条件';
+COMMENT ON COLUMN vts.project_data.step2_json IS 'STEP2 生産条件';
+COMMENT ON COLUMN vts.project_data.step3_json IS 'STEP3 工程フロー構成';
+COMMENT ON COLUMN vts.project_data.step4_json IS 'STEP4 レイアウト設計';
+COMMENT ON COLUMN vts.project_data.step5_json IS 'STEP5 配線・制御設計';
+COMMENT ON COLUMN vts.project_data.version IS 'データバージョン';
+COMMENT ON COLUMN vts.project_data.created_at IS '作成日時';
+COMMENT ON COLUMN vts.project_data.created_by IS '作成者';
+COMMENT ON COLUMN vts.project_data.updated_at IS '更新日時';
+COMMENT ON COLUMN vts.project_data.updated_by IS '更新者';
+
+
+⸻
+
+✅ 六、仿真历史
+
+CREATE TABLE vts.simulation_history (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id UUID NOT NULL,
+    run_no INTEGER NOT NULL,
+    input_snapshot JSONB,
+
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by UUID,
+
+    CONSTRAINT fk_sim_history_project
+        FOREIGN KEY (project_id) REFERENCES vts.projects(id)
+        ON DELETE CASCADE
+);
+
+COMMENT ON TABLE vts.simulation_history IS 'シミュレーション実行履歴';
+
+COMMENT ON COLUMN vts.simulation_history.id IS '履歴ID';
+COMMENT ON COLUMN vts.simulation_history.project_id IS 'プロジェクトID';
+COMMENT ON COLUMN vts.simulation_history.run_no IS '実行回数番号';
+COMMENT ON COLUMN vts.simulation_history.input_snapshot IS '実行時設計データスナップショット';
+COMMENT ON COLUMN vts.simulation_history.created_at IS '実行日時';
+COMMENT ON COLUMN vts.simulation_history.created_by IS '実行ユーザー';
+
+CREATE UNIQUE INDEX uniq_sim_run_no ON vts.simulation_history(project_id, run_no);
+CREATE INDEX idx_sim_history_project ON vts.simulation_history(project_id);
+
+
+⸻
+
+✅ 七、仿真结果
+
+CREATE TABLE vts.simulation_result (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    history_id UUID NOT NULL,
+
+    total_ct DOUBLE PRECISION,
+    throughput DOUBLE PRECISION,
+    bottleneck_process VARCHAR(255),
+    utilization_json JSONB,
+    chart_json JSONB,
+
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_sim_result_history
+        FOREIGN KEY (history_id) REFERENCES vts.simulation_history(id)
+        ON DELETE CASCADE
+);
+
+COMMENT ON TABLE vts.simulation_result IS 'シミュレーション結果';
+
+COMMENT ON COLUMN vts.simulation_result.id IS '結果ID';
+COMMENT ON COLUMN vts.simulation_result.history_id IS '実行履歴ID';
+COMMENT ON COLUMN vts.simulation_result.total_ct IS '総サイクルタイム';
+COMMENT ON COLUMN vts.simulation_result.throughput IS 'スループット';
+COMMENT ON COLUMN vts.simulation_result.bottleneck_process IS 'ボトルネック工程ID';
+COMMENT ON COLUMN vts.simulation_result.utilization_json IS '稼働率詳細JSON';
+COMMENT ON COLUMN vts.simulation_result.chart_json IS 'グラフ表示用データ';
+COMMENT ON COLUMN vts.simulation_result.created_at IS '登録日時';
+
+CREATE INDEX idx_sim_result_history ON vts.simulation_result(history_id);
+
+
+⸻
+
+✅ 八、BOM 快照
+
+CREATE TABLE vts.bom_snapshot (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id UUID NOT NULL,
+
+    source_step5_json JSONB,
+    bom_json JSONB,
+
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by UUID,
+
+    CONSTRAINT fk_bom_project
+        FOREIGN KEY (project_id) REFERENCES vts.projects(id)
+        ON DELETE CASCADE
+);
+
+COMMENT ON TABLE vts.bom_snapshot IS 'BOMおよび配線結果スナップショット';
+
+
+⸻
+
+✅ 九、导出文件
+
+CREATE TABLE vts.export_file (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id UUID NOT NULL,
+
+    file_type VARCHAR(50),
+    file_path VARCHAR(500),
+
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by UUID,
+
+    CONSTRAINT fk_export_project
+        FOREIGN KEY (project_id) REFERENCES vts.projects(id)
+        ON DELETE CASCADE
+);
+
+COMMENT ON TABLE vts.export_file IS '出力ファイル管理（PDF / CSV）';
+
+
+⸻
+
+✅ 十、Master Library
+
+CREATE TABLE vts.master_process (
+    id VARCHAR(50) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    category VARCHAR(100),
+    default_param_json JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+COMMENT ON TABLE vts.master_process IS '標準工程マスタ';
+
+
+⸻
+
+
+CREATE TABLE vts.master_module (
+    id VARCHAR(50) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    size_x DOUBLE PRECISION,
+    size_y DOUBLE PRECISION,
+    size_z DOUBLE PRECISION,
+    speed DOUBLE PRECISION,
+    accel DOUBLE PRECISION,
+    payload DOUBLE PRECISION,
+    param_json JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+COMMENT ON TABLE vts.master_module IS '標準モジュールマスタ';
+
+
+⸻
+
+
+CREATE TABLE vts.master_controller (
+    id VARCHAR(50) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    io_count INTEGER,
+    power VARCHAR(50),
+    param_json JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+COMMENT ON TABLE vts.master_controller IS '制御機器マスタ';
+
+
+⸻
+
+
+CREATE TABLE vts.master_cable (
+    id VARCHAR(50) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    length DOUBLE PRECISION,
+    param_json JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+COMMENT ON TABLE vts.master_cable IS 'ケーブル部材マスタ';
+
+
+⸻
+
+✅ 十一、用户自定义库
+
+CREATE TABLE vts.user_library (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL,
+
+    type VARCHAR(50),
+    name VARCHAR(255),
+    data_json JSONB,
+
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by UUID,
+
+    CONSTRAINT fk_user_library_user
+        FOREIGN KEY (user_id) REFERENCES vts.users(id)
+        ON DELETE CASCADE
+);
+
+COMMENT ON TABLE vts.user_library IS 'ユーザー登録レイアウト／配線テンプレート';
+
+
+⸻
+
+✅ 十二、关于共通字段设计的工程解释
+
+你提出的这个点在工程系统里非常重要：
+	•	created_by / updated_by
+	•	created_at / updated_at
+
+用于：
+	•	问题追踪
+	•	审计日志
+	•	多人协作
+	•	管理员代操作
+
+尤其在制造业系统里是强需求。
+
+⸻
+
+✅ 下一步建议
+
+现在数据库层已经是企业级标准结构了，接下来最合理的顺序是：
+
+👉 FastAPI ORM Model 与这套表结构一一对应
+
+然后继续：
+	•	Project CRUD API
+	•	STEP JSON 保存接口
+
+如果你愿意，我可以下一步直接给你：
+	•	✅ SQLAlchemy Model 全套定义
+	•	✅ Alembic 迁移脚本模板
+
+你跟我说接下来想先打哪一层，我继续往下补。
