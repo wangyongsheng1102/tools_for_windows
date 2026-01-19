@@ -1,3 +1,238 @@
+
+
+这个问题可以一次性把日志体系搭好，后面排错与审计都会省很多时间。下面给你一套工程级可用的 FastAPI 日志方案，包含控制台、文件、按日期滚动、统一格式，以及与 uvicorn 日志不冲突的做法。
+
+⸻
+
+一、第一性原理：FastAPI 日志本质是什么
+
+FastAPI 本身不提供日志系统，它完全依赖：
+	•	Python 标准库 logging
+	•	uvicorn 自带的 access log 与 error log
+
+所以目标只有三个：
+	1.	业务代码统一用同一个 logger
+	2.	日志同时输出到控制台和文件
+	3.	不被 uvicorn 的默认配置覆盖
+
+⸻
+
+二、推荐工程结构
+
+在 backend 根目录增加：
+
+backend/
+ ├─ app/
+ │   ├─ main.py
+ │   ├─ core/
+ │   │   └─ logger.py
+ │   └─ api/...
+ └─ logs/
+
+logs 目录用于存放日志文件。
+
+⸻
+
+三、日志配置实现
+
+app/core/logger.py
+
+import logging
+from logging.handlers import TimedRotatingFileHandler
+from pathlib import Path
+
+LOG_DIR = Path(__file__).resolve().parent.parent.parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+
+LOG_FILE = LOG_DIR / "app.log"
+
+
+def setup_logging():
+    formatter = logging.Formatter(
+        "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
+    )
+
+    file_handler = TimedRotatingFileHandler(
+        LOG_FILE,
+        when="midnight",
+        interval=1,
+        backupCount=14,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(formatter)
+    file_handler.setLevel(logging.INFO)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    console_handler.setLevel(logging.INFO)
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.handlers.clear()
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+
+    # 防止 uvicorn 覆盖
+    logging.getLogger("uvicorn").propagate = True
+    logging.getLogger("uvicorn.error").propagate = True
+    logging.getLogger("uvicorn.access").propagate = False
+
+
+⸻
+
+四、在 FastAPI 启动时加载日志
+
+app/main.py
+
+from fastapi import FastAPI
+from app.core.logger import setup_logging
+import logging
+
+setup_logging()
+
+logger = logging.getLogger(__name__)
+
+app = FastAPI()
+
+
+@app.on_event("startup")
+async def startup():
+    logger.info("FastAPI application started")
+
+
+@app.get("/health")
+def health():
+    logger.info("health check called")
+    return {"status": "ok"}
+
+此时：
+	•	控制台能看到日志
+	•	logs/app.log 会持续写入
+	•	每天自动切分一个文件
+
+⸻
+
+五、在任意模块中使用日志
+
+任何地方统一写法：
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+logger.info("user login success")
+logger.warning("token expired")
+logger.error("db connection failed", exc_info=True)
+
+__name__ 会自动带模块路径，方便定位来源。
+
+⸻
+
+六、记录请求级日志（中间件）
+
+如果你想记录每个请求的耗时与状态码：
+
+import time
+import logging
+from fastapi import Request
+
+logger = logging.getLogger("request")
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.time()
+    response = await call_next(request)
+    cost = (time.time() - start) * 1000
+
+    logger.info(
+        "%s %s %s %.2fms",
+        request.method,
+        request.url.path,
+        response.status_code,
+        cost,
+    )
+    return response
+
+适合生产环境审计与性能分析。
+
+⸻
+
+七、与 uvicorn 启动方式的关系
+
+推荐启动方式
+
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+不要再加：
+
+--log-config
+
+否则会覆盖你自己的 logging 配置。
+
+如果你用 reload
+
+uvicorn app.main:app --reload
+
+子进程也会加载同一套日志配置，行为正常。
+
+⸻
+
+八、常见错误与定位
+
+问题 1：日志文件不生成
+
+原因通常是：
+	•	logs 目录无权限
+	•	相对路径错了
+
+确认：
+
+ls backend/logs
+
+并检查 LOG_DIR 实际路径。
+
+⸻
+
+问题 2：只看到 uvicorn 日志，看不到业务日志
+
+通常是：
+	•	setup_logging 没在 import 早期执行
+	•	root logger 被覆盖
+
+必须保证：
+
+setup_logging()
+
+在 FastAPI 实例创建之前执行。
+
+⸻
+
+九、优劣势与适用性评估
+
+优势
+	•	完全标准 logging 方案
+	•	不依赖第三方库
+	•	可直接对接 ELK、Filebeat
+
+风险与限制
+	•	多进程部署时需注意文件竞争
+	•	不支持结构化日志（JSON）
+	•	无链路追踪能力
+
+置信度评级：高，适用于绝大多数中小型 FastAPI 服务。
+
+⸻
+
+结论
+
+FastAPI 的日志应基于 Python logging，在应用启动阶段统一配置 root logger，然后所有模块按 logging.getLogger(__name__) 使用。
+该方式稳定、可维护、与 uvicorn 不冲突，生产环境可直接使用。
+
+如果你后面要上容器或云日志系统，我可以再给你一套 JSON 结构化日志版本，方便直接接入日志平台。
+
+
+
 明白，这里给你一套可直接执行的 PostgreSQL DDL，包含：
 	•	✅ 创建 schema
 	•	✅ 所有表放入指定 schema
